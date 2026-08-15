@@ -31,6 +31,7 @@ let skipCount = 0;
 let watchdog = null;
 let autoTimer = null;     // 试听结束自动切换的定时器
 let highlightCode = null; // 当前高亮国家（像素地球仪）
+let flashUntil = 0;       // 切歌白闪结束时间（NES 特效）
 let rot = 0;              // 地球仪旋转（经度，度）
 let targetRot = null;     // 要转到的国家经度（null = 空闲自转）
 
@@ -160,6 +161,7 @@ function applyCountry(j) {
 function setCountry(code, displayName) {
   code = /^[A-Z]{2}$/.test(code) ? code : null;
   if (code && map.aliases[code]) code = map.aliases[code];
+  if (code !== highlightCode) flashUntil = performance.now() + 140;
   highlightCode = code; // 保留（即使该国家在地图上没有格子）
   // 定位与缩放：
   //  - 有领土格子 → 转到国家质心（国家居中），按领土大小缩放
@@ -250,23 +252,23 @@ const GR = 132;                    // 球半径（缩放前）
 const ZOOM_MIN = 1, ZOOM_MAX = 7;  // 缩放范围（国家居中，同时能看到周边邻国）
 const ZOOM_FILL = 0.32;            // 目标：国家约占画面高度 32%，保留地缘格局
 
-// 星露谷梦幻配色（柔和渐变暮色 + pastel 海洋 + 温暖草绿 + 暖金高亮）
+// 任天堂红白机（Famicom/NES）配色：饱和原色 + 硬色块 + 黑色描边
 const PAL = {
-  skyTop: [24, 28, 60],      // 天空顶部 深靛蓝
-  skyBot: [52, 54, 100],     // 天空底部 柔和亮紫蓝
-  glow: [140, 170, 210],     // 球体周围柔光
-  star: [255, 244, 214],     // 暖白星光
-  seaDeep: [70, 136, 178],   // 深海 柔和蓝
-  seaMid: [104, 168, 202],   // 中海 蓝
-  seaLit: [152, 204, 228],   // 浅海 淡蓝
-  landDark: [84, 128, 58],   // 陆地描边 深橄榄绿
-  land: [126, 178, 76],      // 陆地 草绿
-  landLit: [170, 210, 108],  // 浅草绿
-  hiA: [255, 224, 122],      // 高亮 柔和金黄
-  hiB: [255, 247, 214],      // 高亮 暖白
-  flagRed: [232, 125, 111],  // 首都标记 柔和红
-  pole: [210, 216, 228],     // 旗杆银
-  poleDark: [118, 126, 146],
+  skyBands: [[0, 0, 168], [0, 0, 188], [0, 88, 248], [60, 188, 252]], // 天空 4 条硬色带（自上而下）
+  rim: [0, 0, 120],          // 球体边缘细描边 深蓝
+  star: [252, 252, 252],     // NES 纯白星光
+  seaDeep: [0, 0, 188],      // 深海 NES 蓝
+  seaMid: [0, 88, 248],      // 中海 NES 蓝
+  seaLit: [60, 188, 252],    // 浅海 亮蓝
+  outline: [0, 0, 0],        // 陆地描边 纯黑（红白机硬边）
+  landDark: [0, 88, 0],      // 深草绿
+  land: [0, 168, 0],         // NES 绿
+  landLit: [88, 248, 152],   // 亮草绿
+  hiA: [248, 184, 0],        // 高亮 NES 黄
+  hiB: [252, 252, 252],      // 高亮 NES 白
+  flagRed: [248, 56, 0],     // 首都旗 NES 红
+  pole: [252, 252, 252],     // 旗杆白
+  poleDark: [88, 88, 88],    // 旗杆座 灰
 };
 
 let backdrop = null;   // 静态背景（梦幻天空+柔光+星空）
@@ -334,48 +336,39 @@ function countryZoom(code) {
   return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
 }
 
-// 静态背景：梦幻渐变天空 + 球体柔光 + 星空
+// 静态背景：NES 硬色带天空 + 球体边缘细描边 + 纯白星空
 function buildBackdrop() {
   backdrop = gctx.createImageData(GW, GH);
   const d = backdrop.data;
-  // 天空垂直渐变（暮色梦幻感）
+  // 天空：4 条 NES 蓝色硬色带（无平滑渐变，红白机风格）
+  const bands = PAL.skyBands;
+  const bandH = GH / bands.length;
   for (let y = 0; y < GH; y++) {
-    const t = y / (GH - 1);
-    const r = Math.round(PAL.skyTop[0] + (PAL.skyBot[0] - PAL.skyTop[0]) * t);
-    const g = Math.round(PAL.skyTop[1] + (PAL.skyBot[1] - PAL.skyTop[1]) * t);
-    const b = Math.round(PAL.skyTop[2] + (PAL.skyBot[2] - PAL.skyTop[2]) * t);
+    const b = Math.min(bands.length - 1, Math.floor(y / bandH));
+    const c = bands[b];
     for (let x = 0; x < GW; x++) {
       const i = (y * GW + x) * 4;
-      d[i] = r; d[i + 1] = g; d[i + 2] = b; d[i + 3] = 255;
+      d[i] = c[0]; d[i + 1] = c[1]; d[i + 2] = c[2]; d[i + 3] = 255;
     }
   }
-  // 球体周围的柔光晕（梦幻光晕）
+  // 球体边缘细描边（深蓝细线，替代柔光）
   for (let y = 0; y < GH; y++) {
     for (let x = 0; x < GW; x++) {
       const dist = Math.hypot(x - GCX, y - GCY);
-      if (dist > GR && dist < GR + 20) {
-        const f = 1 - (dist - GR) / 20;
-        const a = 0.3 * f;
+      if (dist > GR && dist < GR + 3) {
         const i = (y * GW + x) * 4;
-        d[i] = Math.min(255, Math.round(d[i] + PAL.glow[0] * a));
-        d[i + 1] = Math.min(255, Math.round(d[i + 1] + PAL.glow[1] * a));
-        d[i + 2] = Math.min(255, Math.round(d[i + 2] + PAL.glow[2] * a));
+        d[i] = PAL.rim[0]; d[i + 1] = PAL.rim[1]; d[i + 2] = PAL.rim[2]; d[i + 3] = 255;
       }
     }
   }
-  // 星星（暖白，确定性伪随机分布）
+  // 星星（NES 纯白，确定性伪随机分布）
   let seed = 987654321;
   const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
-  for (let i = 0; i < 90; i++) {
+  for (let i = 0; i < 110; i++) {
     const x = (rnd() * GW) | 0;
     const y = (rnd() * GH) | 0;
-    if (Math.hypot(x - GCX, y - GCY) < GR + 12) continue; // 避开球体与光晕
-    const tw = 0.5 + 0.5 * rnd();
-    setPx(d, x, y, [
-      Math.round(PAL.star[0] * tw),
-      Math.round(PAL.star[1] * tw),
-      Math.round(PAL.star[2] * tw),
-    ]);
+    if (Math.hypot(x - GCX, y - GCY) < GR + 6) continue; // 避开球体与描边
+    setPx(d, x, y, PAL.star);
   }
 }
 
@@ -430,19 +423,21 @@ function drawGlobe(now) {
       const gy = Math.min(H - 1, Math.max(0, Math.floor(((90 - lat) / 180) * H)));
       const code = grid.substr((gy * W + gx) * 2, 2);
 
-      let r, g, b;
+      let rgb;
       if (code === '..' || code === '') {
-        const s = dz > 0.92 ? PAL.seaLit : dz > 0.6 ? PAL.seaMid : PAL.seaDeep;
-        r = s[0]; g = s[1]; b = s[2];
+        rgb = dz > 0.92 ? PAL.seaLit : dz > 0.6 ? PAL.seaMid : PAL.seaDeep;
       } else {
-        let base;
-        if (highlightCode && code === highlightCode) base = hiCol;
-        else base = landBorder[gy * W + gx] ? PAL.landDark : (dz > 0.92 ? PAL.landLit : PAL.land);
-        r = base[0]; g = base[1]; b = base[2];
+        if (highlightCode && code === highlightCode) rgb = hiCol;
+        else if (landBorder[gy * W + gx]) rgb = PAL.outline; // 纯黑描边
+        else rgb = dz > 0.92 ? PAL.landLit : dz > 0.6 ? PAL.land : PAL.landDark;
       }
-      // 球体明暗（边缘更暗，产生立体感）
-      const sh = 0.6 + 0.4 * dz;
-      setPx(d, px, py, [(r * sh) | 0, (g * sh) | 0, (b * sh) | 0]);
+      // NES 色块感：主体保持纯色，仅最外圈做一次暗角（保留红白机硬边）
+      const sh = dz > 0.22 ? 1 : 0.55;
+      setPx(d, px, py, [
+        Math.min(255, (rgb[0] * sh) | 0),
+        Math.min(255, (rgb[1] * sh) | 0),
+        Math.min(255, (rgb[2] * sh) | 0),
+      ]);
     }
   }
 
@@ -471,6 +466,15 @@ function drawGlobe(now) {
     }
   }
 
+  // NES 切歌白闪：短暂全屏闪白，随时间淡出
+  if (flashUntil > now) {
+    const f = 0.55 * ((flashUntil - now) / 140);
+    for (let i = 0; i < d.length; i += 4) {
+      d[i] = Math.min(255, Math.round(d[i] + (255 - d[i]) * f));
+      d[i + 1] = Math.min(255, Math.round(d[i + 1] + (255 - d[i + 1]) * f));
+      d[i + 2] = Math.min(255, Math.round(d[i + 2] + (255 - d[i + 2]) * f));
+    }
+  }
   gctx.putImageData(frameImg, 0, 0);
 }
 
@@ -479,11 +483,11 @@ function updateGlobe() {
     // 偏航（最短弧） + 俯仰 + 缩放 平滑趋近
     const delta = ((targetRot - rot + 540) % 360) - 180;
     if (Math.abs(delta) < 0.4) rot = targetRot;
-    else rot += delta * 0.05;
-    pitch += (targetPitch - pitch) * 0.05;
-    zoom += (targetZoom - zoom) * 0.05;
+    else rot += delta * 0.08;             // 转向更干脆（红白机手感）
+    pitch += (targetPitch - pitch) * 0.06;
+    zoom += (targetZoom - zoom) * 0.06;
   } else {
-    rot = (rot + 0.05 + 360) % 360;       // 空闲缓慢自转
+    rot = (rot + 0.06 + 360) % 360;       // 空闲缓慢自转
     pitch += (0 - pitch) * 0.03;          // 回正
     zoom += (1 - zoom) * 0.03;            // 还原
   }

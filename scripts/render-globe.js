@@ -8,11 +8,12 @@ const map = JSON.parse(fs.readFileSync('public/map.json', 'utf8'));
 const GW = 320, GH = 320, GCX = 160, GCY = 160, GR = 132;
 const ZOOM_MAX = 7, ZOOM_FILL = 0.32;
 const PAL = {
-  skyTop: [24, 28, 60], skyBot: [52, 54, 100], glow: [140, 170, 210], star: [255, 244, 214],
-  seaDeep: [70, 136, 178], seaMid: [104, 168, 202], seaLit: [152, 204, 228],
-  landDark: [84, 128, 58], land: [126, 178, 76], landLit: [170, 210, 108],
-  hiA: [255, 224, 122], hiB: [255, 247, 214],
-  flagRed: [232, 125, 111], pole: [210, 216, 228], poleDark: [118, 126, 146],
+  skyBands: [[0, 0, 168], [0, 0, 188], [0, 88, 248], [60, 188, 252]],
+  rim: [0, 0, 120], star: [252, 252, 252],
+  seaDeep: [0, 0, 188], seaMid: [0, 88, 248], seaLit: [60, 188, 252],
+  outline: [0, 0, 0], landDark: [0, 88, 0], land: [0, 168, 0], landLit: [88, 248, 152],
+  hiA: [248, 184, 0], hiB: [252, 252, 252],
+  flagRed: [248, 56, 0], pole: [252, 252, 252], poleDark: [88, 88, 88],
 };
 const capitals = JSON.parse(fs.readFileSync('public/capitals.json', 'utf8'));
 const buf = Buffer.alloc(GW * GH * 4);
@@ -21,37 +22,32 @@ const setPx = (x, y, rgb) => {
   const i = (y * GW + x) * 4;
   buf[i] = rgb[0]; buf[i + 1] = rgb[1]; buf[i + 2] = rgb[2]; buf[i + 3] = 255;
 };
-// 梦幻渐变天空 + 柔光 + 星空
+// NES 硬色带天空 + 球体边缘细描边 + 纯白星空
 (function buildBackdrop() {
+  const bands = PAL.skyBands;
+  const bandH = GH / bands.length;
   for (let y = 0; y < GH; y++) {
-    const t = y / (GH - 1);
-    const r = Math.round(PAL.skyTop[0] + (PAL.skyBot[0] - PAL.skyTop[0]) * t);
-    const g = Math.round(PAL.skyTop[1] + (PAL.skyBot[1] - PAL.skyTop[1]) * t);
-    const b = Math.round(PAL.skyTop[2] + (PAL.skyBot[2] - PAL.skyTop[2]) * t);
+    const b = Math.min(bands.length - 1, Math.floor(y / bandH));
+    const c = bands[b];
     for (let x = 0; x < GW; x++) {
       const i = (y * GW + x) * 4;
-      buf[i] = r; buf[i + 1] = g; buf[i + 2] = b; buf[i + 3] = 255;
+      buf[i] = c[0]; buf[i + 1] = c[1]; buf[i + 2] = c[2]; buf[i + 3] = 255;
     }
   }
   for (let y = 0; y < GH; y++) for (let x = 0; x < GW; x++) {
     const dist = Math.hypot(x - GCX, y - GCY);
-    if (dist > GR && dist < GR + 20) {
-      const f = 1 - (dist - GR) / 20;
-      const a = 0.3 * f;
+    if (dist > GR && dist < GR + 3) {
       const i = (y * GW + x) * 4;
-      buf[i] = Math.min(255, Math.round(buf[i] + PAL.glow[0] * a));
-      buf[i + 1] = Math.min(255, Math.round(buf[i + 1] + PAL.glow[1] * a));
-      buf[i + 2] = Math.min(255, Math.round(buf[i + 2] + PAL.glow[2] * a));
+      buf[i] = PAL.rim[0]; buf[i + 1] = PAL.rim[1]; buf[i + 2] = PAL.rim[2]; buf[i + 3] = 255;
     }
   }
   let seed = 987654321;
   const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
-  for (let i = 0; i < 90; i++) {
+  for (let i = 0; i < 110; i++) {
     const x = (rnd() * GW) | 0;
     const y = (rnd() * GH) | 0;
-    if (Math.hypot(x - GCX, y - GCY) < GR + 12) continue;
-    const tw = 0.5 + 0.5 * rnd();
-    setPx(x, y, [Math.round(PAL.star[0] * tw), Math.round(PAL.star[1] * tw), Math.round(PAL.star[2] * tw)]);
+    if (Math.hypot(x - GCX, y - GCY) < GR + 6) continue;
+    setPx(x, y, PAL.star);
   }
 })();
 
@@ -125,18 +121,16 @@ function render(code, zoomOverride) {
       const gx = Math.min(map.w - 1, Math.max(0, Math.floor((lon + 180) / 360 * map.w)));
       const gy = Math.min(map.h - 1, Math.max(0, Math.floor((90 - lat) / (180 / map.h))));
       const c = map.grid.substr((gy * map.w + gx) * 2, 2);
-      let r, g, b;
+      let rgb;
       if (c === '..') {
-        const s = dz > 0.92 ? PAL.seaLit : dz > 0.6 ? PAL.seaMid : PAL.seaDeep;
-        r = s[0]; g = s[1]; b = s[2];
+        rgb = dz > 0.92 ? PAL.seaLit : dz > 0.6 ? PAL.seaMid : PAL.seaDeep;
       } else {
-        let base;
-        if (c === code) base = hiCol;
-        else base = landBorder[gy * map.w + gx] ? PAL.landDark : (dz > 0.92 ? PAL.landLit : PAL.land);
-        r = base[0]; g = base[1]; b = base[2];
+        if (c === code) rgb = hiCol;
+        else if (landBorder[gy * map.w + gx]) rgb = PAL.outline;
+        else rgb = dz > 0.92 ? PAL.landLit : dz > 0.6 ? PAL.land : PAL.landDark;
       }
-      const sh = 0.6 + 0.4 * dz;
-      setPx(px, py, [(r * sh) | 0, (g * sh) | 0, (b * sh) | 0]);
+      const sh = dz > 0.22 ? 1 : 0.55;
+      setPx(px, py, [Math.min(255, (rgb[0] * sh) | 0), Math.min(255, (rgb[1] * sh) | 0), Math.min(255, (rgb[2] * sh) | 0)]);
     }
   }
   // 首都像素旗标记（与 app.js 一致，随分辨率缩放）
