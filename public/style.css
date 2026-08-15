@@ -1,0 +1,353 @@
+/* ================= 世界唱片机 World Vinyl ================= */
+:root {
+  --bg: #0b0d13;
+  --panel: #131722;
+  --wood1: #5a3a1e;
+  --wood2: #2c1a0b;
+  --gold: #d9a441;
+  --gold-dim: #8a6a2a;
+  --cream: #f2e7cf;
+  --muted: #8b93a7;
+  --led: #ff4d4d;
+  --land: #23402e;
+  --sea: #101e30;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body { height: 100%; }
+
+body {
+  font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+  background:
+    radial-gradient(1200px 600px at 50% -10%, #1a2132 0%, transparent 60%),
+    var(--bg);
+  color: var(--cream);
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  padding: 24px 16px;
+}
+
+.stage { width: 100%; max-width: 1080px; display: flex; flex-direction: column; gap: 18px; }
+
+/* ---------------- header ---------------- */
+.topbar { text-align: center; }
+.title {
+  font-size: 30px; letter-spacing: 2px;
+  text-shadow: 0 0 24px rgba(217, 164, 65, .35);
+}
+.title-en {
+  font-family: Georgia, serif; font-size: 13px; letter-spacing: 6px;
+  color: var(--gold); display: block; margin-top: 4px;
+}
+.subtitle { margin-top: 8px; color: var(--muted); font-size: 14px; }
+
+kbd {
+  display: inline-block; padding: 1px 7px; border-radius: 4px;
+  background: #232a38; border: 1px solid #3a4356; border-bottom-width: 2px;
+  font-family: inherit; font-size: 12px; color: var(--cream);
+}
+
+/* ---------------- layout ---------------- */
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+/* ================= 唱片机 ================= */
+.deck {
+  background: linear-gradient(150deg, var(--wood1), var(--wood2) 60%);
+  border-radius: 22px;
+  padding: 26px 24px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .55), inset 0 1px 0 rgba(255, 255, 255, .12);
+  border: 1px solid rgba(255, 255, 255, .06);
+}
+.deck-main {
+  display: flex;
+  gap: 22px;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.deck-bar {
+  display: flex;
+  gap: 26px;
+  align-items: center;
+  justify-content: center;
+  padding-top: 8px;
+}
+
+.turntable {
+  position: relative;
+  width: min(430px, 76vw);
+  aspect-ratio: 1 / 1;
+  flex-shrink: 0;
+}
+
+/* 转盘底座 */
+.platter {
+  position: absolute; inset: 9%;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 42%, #2b2b31, #101014 70%);
+  box-shadow:
+    inset 0 0 24px rgba(0, 0, 0, .9),
+    0 8px 22px rgba(0, 0, 0, .6);
+}
+.platter::after {
+  content: ""; position: absolute; inset: 3px; border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, .05);
+}
+
+/* 黑胶唱片 */
+.record {
+  position: absolute; inset: 12%;
+  border-radius: 50%;
+  background:
+    repeating-radial-gradient(circle at 50% 50%,
+      #17171b 0px, #17171b 2px,
+      #222228 2px, #222228 4px);
+  box-shadow: inset 0 0 30px rgba(0, 0, 0, .85);
+  animation: spin 2.2s linear infinite;
+  animation-play-state: paused;
+  cursor: pointer;
+}
+.record::after { /* 高光 */
+  content: ""; position: absolute; inset: 0; border-radius: 50%;
+  background: conic-gradient(from 200deg,
+    transparent 0deg, rgba(255, 255, 255, .09) 40deg, transparent 90deg,
+    transparent 180deg, rgba(255, 255, 255, .04) 220deg, transparent 270deg);
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* 唱片标签（可显示专辑封面） */
+.label {
+  position: absolute; left: 50%; top: 50%;
+  width: 36%; aspect-ratio: 1 / 1;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 3px; padding: 8px;
+  text-align: center;
+  background-size: cover; background-position: center;
+  box-shadow: inset 0 0 18px rgba(0, 0, 0, .45), 0 0 0 2px rgba(0, 0, 0, .55);
+  overflow: hidden;
+}
+.label::before { /* 封面上的暗层，保证文字可读 */
+  content: ""; position: absolute; inset: 0; border-radius: 50%;
+  background: linear-gradient(180deg, rgba(0, 0, 0, .16), rgba(0, 0, 0, .55));
+  z-index: 0;
+}
+.label > * { position: relative; z-index: 1; }
+.label-kicker {
+  font-size: 7px; letter-spacing: 2px; opacity: .9;
+  font-family: Georgia, serif;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .6);
+}
+.label-title {
+  font-size: 12px; font-weight: 700; line-height: 1.22;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; word-break: break-all;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .8);
+}
+.label-artist {
+  font-size: 9px; opacity: .95; max-width: 92%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .8);
+}
+
+/* 中轴 */
+.spindle {
+  position: absolute; left: 50%; top: 50%;
+  width: 12px; height: 12px; transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #e8e8ec, #7d7d85 60%, #3a3a40);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .8);
+  z-index: 3;
+}
+
+/* 唱臂 */
+.tonearm {
+  position: absolute; left: 64%; top: 0;
+  width: 36%; height: 100%;
+  transform-origin: 100% 0%;
+  transform: rotate(-35deg);          /* 抬起待机，停在转盘右侧 */
+  transition: transform .55s cubic-bezier(.5, .1, .3, 1.2);
+  z-index: 6;
+  pointer-events: none;
+}
+.arm {
+  position: absolute; right: 0; top: 0;
+  width: 8px; height: 54%;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #56565e, #2e2e34 60%);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, .5);
+}
+.headshell {
+  position: absolute; right: -5px; top: 51%;
+  width: 18px; height: 11px;
+  border-radius: 2px;
+  background: #202024;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, .5);
+}
+.headshell::after { /* 唱针 */
+  content: ""; position: absolute; left: 50%; bottom: -7px;
+  transform: translateX(-50%);
+  width: 3px; height: 8px;
+  background: #c9c9cf;
+  border-radius: 2px;
+}
+.pivot {
+  position: absolute; right: -10px; top: -10px;
+  width: 20px; height: 20px; border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #e4e4e8, #6a6a72 55%, #33333a);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, .7);
+}
+
+.deck.playing .tonearm { transform: rotate(-6deg); }    /* 落下播放 */
+
+/* 指示灯 */
+.led-wrap {
+  display: flex; align-items: center; gap: 8px;
+}
+.led {
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--led);
+  box-shadow: 0 0 8px var(--led);
+  opacity: .35;
+}
+.deck.playing .led { animation: ledpulse 1.1s ease-in-out infinite; }
+@keyframes ledpulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 14px var(--led); }
+  50% { opacity: .45; box-shadow: 0 0 4px var(--led); }
+}
+.led-text { font-size: 11px; letter-spacing: 2px; color: var(--muted); }
+.deck.playing .led-text { color: var(--gold); }
+
+/* 按钮 */
+.controls {
+  display: flex; gap: 14px;
+}
+.btn {
+  width: 46px; height: 46px; border-radius: 50%;
+  border: 2px solid var(--gold-dim);
+  background: radial-gradient(circle at 35% 30%, #3a3322, #171310 70%);
+  color: var(--gold); font-size: 16px;
+  cursor: pointer;
+  transition: transform .12s ease, box-shadow .12s ease;
+}
+.btn:hover { transform: scale(1.08); box-shadow: 0 0 14px rgba(217, 164, 65, .35); }
+.btn:active { transform: scale(.95); }
+
+/* 正在播放信息 */
+.now-playing {
+  min-width: 240px; flex: 1 1 220px;
+  background: rgba(10, 12, 18, .55);
+  border: 1px solid rgba(255, 255, 255, .07);
+  border-radius: 14px;
+  padding: 16px 18px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.np-label {
+  font-family: Georgia, serif; font-size: 11px; letter-spacing: 3px;
+  color: var(--gold);
+}
+.np-station {
+  font-size: 20px; font-weight: 800; line-height: 1.3;
+  word-break: break-all;
+}
+.np-country { font-size: 15px; color: var(--cream); }
+.np-meta { font-size: 12px; color: var(--muted); min-height: 1em; }
+.np-status { font-size: 13px; color: var(--gold); min-height: 1.2em; }
+
+.np-progress {
+  height: 4px; border-radius: 2px;
+  background: rgba(255, 255, 255, .08);
+  overflow: hidden;
+}
+.np-progress-fill {
+  height: 100%; width: 0%;
+  background: linear-gradient(90deg, var(--gold-dim), var(--gold));
+  transition: width .25s linear;
+}
+
+.eq { display: flex; align-items: flex-end; gap: 3px; height: 26px; margin-top: auto; }
+.eq span {
+  width: 4px; height: 40%; border-radius: 2px;
+  background: var(--gold);
+  animation: eqb .7s ease-in-out infinite alternate;
+  animation-play-state: paused;
+}
+.eq span:nth-child(2) { animation-delay: .1s; }
+.eq span:nth-child(3) { animation-delay: .25s; }
+.eq span:nth-child(4) { animation-delay: .15s; }
+.eq span:nth-child(5) { animation-delay: .35s; }
+@keyframes eqb { from { height: 18%; } to { height: 100%; } }
+.deck.playing .eq span { animation-play-state: running; }
+
+/* ================= 像素地球仪（任天堂像素风） ================= */
+.globe-card {
+  background: #0c0e1e;
+  border: 6px solid #232642;
+  border-radius: 12px;
+  padding: 16px;
+  display: flex; flex-direction: column; gap: 12px;
+  box-shadow:
+    0 0 0 3px #101224,
+    0 14px 40px rgba(0, 0, 0, .55),
+    inset 0 0 0 2px #3a3f6b;
+}
+.globe-card::before {
+  /* 顶部卡通标题条 */
+  content: "★ PIXEL GLOBE ★";
+  font-family: Georgia, serif;
+  font-size: 12px; letter-spacing: 4px; text-align: center;
+  color: #ffe14d;
+  background: #232642;
+  border: 3px solid #101224;
+  border-radius: 8px;
+  padding: 6px 0;
+  text-shadow: 1px 1px 0 #7a5b10;
+}
+#globe {
+  width: min(430px, 94%);
+  margin: 0 auto;
+  height: auto;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  border: 4px solid #101224;
+  border-radius: 8px;
+  background: #101233;
+}
+.globe-caption {
+  display: flex; flex-direction: column; gap: 6px; text-align: center;
+}
+.globe-kicker {
+  font-family: Georgia, serif; font-size: 11px; letter-spacing: 3px;
+  color: #8f97c9;
+}
+.globe-country {
+  font-size: 18px; font-weight: 700;
+  min-height: 1.4em;
+  color: var(--cream);
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, .6);
+}
+
+/* ---------------- footer ---------------- */
+.footer {
+  display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  font-size: 12px; color: var(--muted);
+}
+.footer a { color: var(--gold); text-decoration: none; }
+.footer a:hover { text-decoration: underline; }
+
+/* ---------------- responsive ---------------- */
+@media (max-width: 860px) {
+  .layout { grid-template-columns: 1fr; }
+}

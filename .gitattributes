@@ -1,0 +1,4 @@
+# 统一换行处理；批处理文件必须保持 CRLF（否则 Windows 双击可能不执行）
+* text=auto eol=lf
+*.bat text eol=crlf
+*.png binary

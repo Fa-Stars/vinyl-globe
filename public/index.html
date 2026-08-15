@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>世界唱片机 · World Vinyl</title>
+  <link rel="stylesheet" href="style.css?v=7">
+</head>
+<body>
+  <div class="stage">
+
+    <header class="topbar">
+      <h1 class="title">🌍 世界唱片机 <span class="title-en">WORLD VINYL</span></h1>
+      <p class="subtitle">随机播放来自世界任意一个角落的歌曲 —— 按下 <kbd>R</kbd> 切换</p>
+    </header>
+
+    <main class="layout">
+      <!-- 左侧：唱片机 -->
+      <section class="deck" id="deck">
+        <div class="deck-main">
+          <div class="turntable">
+            <div class="platter">
+              <div class="record" id="record">
+                <div class="label" id="label">
+                  <span class="label-kicker">NOW SPINNING</span>
+                  <span class="label-title" id="label-title">——</span>
+                  <span class="label-artist" id="label-artist"></span>
+                </div>
+              </div>
+              <div class="spindle" id="spindle"></div>
+            </div>
+
+            <div class="tonearm" id="tonearm">
+              <div class="arm"></div>
+              <div class="headshell"></div>
+              <div class="pivot"></div>
+            </div>
+          </div>
+
+          <div class="now-playing">
+            <div class="np-label">NOW SPINNING · 正在播放</div>
+            <div class="np-station" id="np-station">——</div>
+            <div class="np-country" id="np-country">🌐 ——</div>
+            <div class="np-meta" id="np-meta"></div>
+            <div class="np-status" id="np-status">加载中…</div>
+            <div class="np-progress"><div class="np-progress-fill" id="np-progress-fill"></div></div>
+            <div class="eq" id="eq"><span></span><span></span><span></span><span></span><span></span></div>
+          </div>
+        </div>
+
+        <div class="deck-bar">
+          <div class="led-wrap">
+            <span class="led" id="led"></span>
+            <span class="led-text" id="led-text">STANDBY</span>
+          </div>
+          <div class="controls">
+            <button class="btn" id="btn-next" title="随机下一首 (R)">⏭</button>
+            <button class="btn" id="btn-play" title="播放 / 暂停 (Space)">▶</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 右侧：像素地球 -->
+      <aside class="globe-card">
+        <canvas id="globe" width="320" height="320"></canvas>
+        <div class="globe-caption">
+          <span class="globe-kicker">PIXEL GLOBE · 像素地球</span>
+          <span class="globe-country" id="globe-country">——</span>
+        </div>
+      </aside>
+    </main>
+
+    <footer class="footer">
+      <span><kbd>R</kbd> 随机切换 · <kbd>Space</kbd> 播放/暂停 · 点击唱片暂停 · 歌曲结束自动连播</span>
+      <span class="credit">歌曲来自 <a href="https://www.jamendo.com" target="_blank" rel="noopener">Jamendo</a> · 地图数据来自 Natural Earth</span>
+    </footer>
+  </div>
+
+  <audio id="audio" preload="none"></audio>
+  <script src="app.js?v=7"></script>
+</body>
+</html>

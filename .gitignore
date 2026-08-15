@@ -1,0 +1,17 @@
+# ---- 运行缓存（会自动重建，不入库） ----
+data/audio/
+data/songs/
+data/jamendo/
+data/ne_110m_admin_0_countries.geojson
+data/globe-*.png
+
+# ---- 本地配置（含 Jamendo key，不入库；用 config.example.json 作模板） ----
+data/config.json
+
+# ---- 系统/编辑器 ----
+node_modules/
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
