@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>世界唱片机 · World Vinyl</title>
-  <link rel="stylesheet" href="style.css?v=8">
+  <link rel="stylesheet" href="style.css?v=9">
 </head>
 <body>
   <div class="stage">
@@ -61,11 +61,35 @@
       </section>
 
       <!-- 右侧：像素地球 -->
-      <aside class="globe-card">
-        <canvas id="globe" width="320" height="320"></canvas>
+      <aside class="globe-card" aria-label="正在播放歌曲的国家定位">
+        <div class="globe-head">
+          <div class="globe-heading">
+            <span class="globe-eyebrow"><span class="globe-live-dot"></span> LIVE SIGNAL</span>
+            <strong>WORLD POSITION</strong>
+          </div>
+          <span class="globe-index">01 / 01</span>
+        </div>
+
+        <div class="globe-stage">
+          <div class="globe-orbit globe-orbit-a" aria-hidden="true"></div>
+          <div class="globe-orbit globe-orbit-b" aria-hidden="true"></div>
+          <div class="globe-corner globe-corner-tl" aria-hidden="true"></div>
+          <div class="globe-corner globe-corner-tr" aria-hidden="true"></div>
+          <div class="globe-corner globe-corner-bl" aria-hidden="true"></div>
+          <div class="globe-corner globe-corner-br" aria-hidden="true"></div>
+          <div class="globe-readout globe-readout-top">LAT <span id="globe-lat">--°</span></div>
+          <div class="globe-readout globe-readout-right">LON <span id="globe-lon">--°</span></div>
+          <canvas id="globe" width="320" height="320"></canvas>
+          <div class="globe-scanline" aria-hidden="true"></div>
+        </div>
+
         <div class="globe-caption">
-          <span class="globe-kicker">PIXEL GLOBE · 像素地球</span>
-          <span class="globe-country" id="globe-country">——</span>
+          <div class="globe-kicker">CURRENT TERRITORY · 当前区域</div>
+          <div class="globe-country" id="globe-country">🌐 ——</div>
+          <div class="globe-signal-row">
+            <span class="globe-signal"><span class="globe-signal-bars"><i></i><i></i><i></i></span> SIGNAL LOCKED</span>
+            <span class="globe-hint" id="globe-hint">等待歌曲定位…</span>
+          </div>
         </div>
       </aside>
     </main>
@@ -77,6 +101,6 @@
   </div>
 
   <audio id="audio" preload="none"></audio>
-  <script src="app.js?v=8"></script>
+  <script src="app.js?v=9"></script>
 </body>
 </html>

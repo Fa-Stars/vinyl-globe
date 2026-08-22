@@ -5,15 +5,15 @@ const zlib = require('zlib');
 
 const map = JSON.parse(fs.readFileSync('public/map.json', 'utf8'));
 
-const GW = 320, GH = 320, GCX = 160, GCY = 160, GR = 132;
-const ZOOM_MAX = 7, ZOOM_FILL = 0.32;
+const GW = 320, GH = 320, GCX = 160, GCY = 160, GR = 136;
+const ZOOM_MAX = 7, ZOOM_FILL = 0.28;
 const PAL = {
-  skyBands: [[0, 0, 168], [0, 0, 188], [0, 88, 248], [60, 188, 252]],
-  rim: [0, 0, 120], star: [252, 252, 252],
-  seaDeep: [0, 0, 188], seaMid: [0, 88, 248], seaLit: [60, 188, 252],
-  outline: [0, 0, 0], landDark: [0, 88, 0], land: [0, 168, 0], landLit: [88, 248, 152],
-  hiA: [248, 184, 0], hiB: [252, 252, 252],
-  flagRed: [248, 56, 0], pole: [252, 252, 252], poleDark: [88, 88, 88],
+  skyBands: [[4, 12, 23], [5, 20, 34], [7, 31, 45], [10, 43, 52], [13, 55, 57]],
+  rim: [53, 148, 140], star: [170, 224, 196],
+  seaDeep: [3, 26, 45], seaMid: [5, 55, 73], seaLit: [17, 101, 105],
+  outline: [9, 33, 42], landDark: [25, 64, 59], land: [53, 119, 96], landLit: [122, 185, 139],
+  hiA: [255, 196, 80], hiB: [255, 240, 174],
+  flagRed: [255, 108, 92], pole: [226, 244, 211], poleDark: [79, 111, 104],
 };
 const capitals = JSON.parse(fs.readFileSync('public/capitals.json', 'utf8'));
 const buf = Buffer.alloc(GW * GH * 4);
@@ -22,7 +22,7 @@ const setPx = (x, y, rgb) => {
   const i = (y * GW + x) * 4;
   buf[i] = rgb[0]; buf[i + 1] = rgb[1]; buf[i + 2] = rgb[2]; buf[i + 3] = 255;
 };
-// NES 硬色带天空 + 球体边缘细描边 + 纯白星空
+// 深空色带天空 + 球体边缘细描边 + 低亮度星空
 (function buildBackdrop() {
   const bands = PAL.skyBands;
   const bandH = GH / bands.length;

@@ -15,6 +15,9 @@ const npMeta = el('np-meta');
 const npStatus = el('np-status');
 const npProgressFill = el('np-progress-fill');
 const globeCountry = el('globe-country');
+const globeHint = el('globe-hint');
+const globeLat = el('globe-lat');
+const globeLon = el('globe-lon');
 const ledText = el('led-text');
 const btnPlay = el('btn-play');
 
@@ -31,7 +34,7 @@ let skipCount = 0;
 let watchdog = null;
 let autoTimer = null;     // 试听结束自动切换的定时器
 let highlightCode = null; // 当前高亮国家（像素地球仪）
-let flashUntil = 0;       // 切歌白闪结束时间（NES 特效）
+let flashUntil = 0;       // 切歌信号闪烁结束时间
 let rot = 0;              // 地球仪旋转（经度，度）
 let targetRot = null;     // 要转到的国家经度（null = 空闲自转）
 
@@ -54,6 +57,11 @@ function fmtDuration(sec) {
   const m = Math.floor(sec / 60);
   const s = Math.floor(sec % 60);
   return m + ':' + String(s).padStart(2, '0');
+}
+
+function fmtCoordinate(value, positive, negative) {
+  if (!Number.isFinite(value)) return '--°';
+  return Math.abs(value).toFixed(1) + '°' + (value >= 0 ? positive : negative);
 }
 
 /* ---------------- 音频控制 ---------------- */
@@ -186,6 +194,12 @@ function setCountry(code, displayName) {
   const flag = codeToFlag(code);
   npCountry.textContent = flag + ' ' + name;
   globeCountry.textContent = flag + ' ' + name;
+  const cap = code && capitals[code];
+  const lat = cap ? cap[0] : (code ? countryLat[code] : undefined);
+  const lon = cap ? cap[1] : (code ? countryLon[code] : undefined);
+  globeLat.textContent = fmtCoordinate(lat, 'N', 'S');
+  globeLon.textContent = fmtCoordinate(lon, 'E', 'W');
+  globeHint.textContent = code ? 'SIGNAL LOCKED · 已锁定' : 'WAITING FOR SIGNAL · 等待定位';
   return code;
 }
 
@@ -240,7 +254,7 @@ async function next() {
 }
 
 /* ================================================================
-   像素地球（任天堂卡通像素风）
+   像素地球（夜航控制台）
    - 纯球体：等距柱状地图 → 正交投影，带球体明暗（无支架底座）
    - 任意方向旋转：偏航(rot) + 俯仰(pitch)，可转到任意国家正前方
    - 自适应缩放：按国家领土大小放大，小国也占画面足够比例
@@ -248,27 +262,28 @@ async function next() {
    ================================================================ */
 const GW = 320, GH = 320;          // 逻辑画布尺寸（高分辨率，CSS 放大 + pixelated）
 const GCX = 160, GCY = 160;        // 球心
-const GR = 132;                    // 球半径（缩放前）
+const GR = 136;                    // 球半径（缩放前）
 const ZOOM_MIN = 1, ZOOM_MAX = 7;  // 缩放范围（国家居中，同时能看到周边邻国）
-const ZOOM_FILL = 0.32;            // 目标：国家约占画面高度 32%，保留地缘格局
+const ZOOM_FILL = 0.28;            // 目标：国家约占画面高度 28%，保留地缘格局
 
-// 任天堂红白机（Famicom/NES）配色：饱和原色 + 硬色块 + 黑色描边
+// 夜航控制台配色：深海蓝 + 低饱和陆地 + 琥珀定位信号
 const PAL = {
-  skyBands: [[0, 0, 168], [0, 0, 188], [0, 88, 248], [60, 188, 252]], // 天空 4 条硬色带（自上而下）
-  rim: [0, 0, 120],          // 球体边缘细描边 深蓝
-  star: [252, 252, 252],     // NES 纯白星光
-  seaDeep: [0, 0, 188],      // 深海 NES 蓝
-  seaMid: [0, 88, 248],      // 中海 NES 蓝
-  seaLit: [60, 188, 252],    // 浅海 亮蓝
-  outline: [0, 0, 0],        // 陆地描边 纯黑（红白机硬边）
-  landDark: [0, 88, 0],      // 深草绿
-  land: [0, 168, 0],         // NES 绿
-  landLit: [88, 248, 152],   // 亮草绿
-  hiA: [248, 184, 0],        // 高亮 NES 黄
-  hiB: [252, 252, 252],      // 高亮 NES 白
-  flagRed: [248, 56, 0],     // 首都旗 NES 红
-  pole: [252, 252, 252],     // 旗杆白
-  poleDark: [88, 88, 88],    // 旗杆座 灰
+  skyBands: [[4, 12, 23], [5, 20, 34], [7, 31, 45], [10, 43, 52], [13, 55, 57]],
+  rim: [53, 148, 140],
+  star: [170, 224, 196],
+  seaDeep: [3, 26, 45],
+  seaMid: [5, 55, 73],
+  seaLit: [17, 101, 105],
+  outline: [9, 33, 42],
+  landDark: [25, 64, 59],
+  land: [53, 119, 96],
+  landLit: [122, 185, 139],
+  hiA: [255, 196, 80],
+  hiB: [255, 240, 174],
+  flagRed: [255, 108, 92],
+  pole: [226, 244, 211],
+  poleDark: [79, 111, 104],
+  markerGlow: [255, 206, 106],
 };
 
 let backdrop = null;   // 静态背景（梦幻天空+柔光+星空）
@@ -336,11 +351,27 @@ function countryZoom(code) {
   return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
 }
 
-// 静态背景：NES 硬色带天空 + 球体边缘细描边 + 纯白星空
+function blendPx(d, x, y, rgb, alpha) {
+  if (x < 0 || x >= GW || y < 0 || y >= GH) return;
+  const i = (y * GW + x) * 4;
+  d[i] = Math.round(d[i] + (rgb[0] - d[i]) * alpha);
+  d[i + 1] = Math.round(d[i + 1] + (rgb[1] - d[i + 1]) * alpha);
+  d[i + 2] = Math.round(d[i + 2] + (rgb[2] - d[i + 2]) * alpha);
+}
+
+function drawPixelCircle(d, cx, cy, radius, rgb, alpha) {
+  const steps = Math.max(24, Math.round(radius * 4));
+  for (let i = 0; i < steps; i++) {
+    const a = (i / steps) * Math.PI * 2;
+    blendPx(d, Math.round(cx + Math.cos(a) * radius), Math.round(cy + Math.sin(a) * radius), rgb, alpha);
+  }
+}
+
+// 静态背景：深空色带 + 球体边缘细描边 + 低亮度星点
 function buildBackdrop() {
   backdrop = gctx.createImageData(GW, GH);
   const d = backdrop.data;
-  // 天空：4 条 NES 蓝色硬色带（无平滑渐变，红白机风格）
+  // 天空：分段色带保留像素感，但降低饱和度以衬托定位信号
   const bands = PAL.skyBands;
   const bandH = GH / bands.length;
   for (let y = 0; y < GH; y++) {
@@ -351,23 +382,24 @@ function buildBackdrop() {
       d[i] = c[0]; d[i + 1] = c[1]; d[i + 2] = c[2]; d[i + 3] = 255;
     }
   }
-  // 球体边缘细描边（深蓝细线，替代柔光）
+  // 球体边缘：青绿色细线，替代旧版突兀的纯蓝边框
   for (let y = 0; y < GH; y++) {
     for (let x = 0; x < GW; x++) {
       const dist = Math.hypot(x - GCX, y - GCY);
-      if (dist > GR && dist < GR + 3) {
+      if (dist > GR + 3 && dist < GR + 6) blendPx(d, x, y, PAL.rim, .16);
+      if (dist > GR && dist <= GR + 3) {
         const i = (y * GW + x) * 4;
         d[i] = PAL.rim[0]; d[i + 1] = PAL.rim[1]; d[i + 2] = PAL.rim[2]; d[i + 3] = 255;
       }
     }
   }
-  // 星星（NES 纯白，确定性伪随机分布）
+  // 星点：确定性分布，避免每帧闪烁
   let seed = 987654321;
   const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
-  for (let i = 0; i < 110; i++) {
+  for (let i = 0; i < 86; i++) {
     const x = (rnd() * GW) | 0;
     const y = (rnd() * GH) | 0;
-    if (Math.hypot(x - GCX, y - GCY) < GR + 6) continue; // 避开球体与描边
+    if (Math.hypot(x - GCX, y - GCY) < GR + 8) continue;
     setPx(d, x, y, PAL.star);
   }
 }
@@ -431,7 +463,7 @@ function drawGlobe(now) {
         else if (landBorder[gy * W + gx]) rgb = PAL.outline; // 纯黑描边
         else rgb = dz > 0.92 ? PAL.landLit : dz > 0.6 ? PAL.land : PAL.landDark;
       }
-      // NES 色块感：主体保持纯色，仅最外圈做一次暗角（保留红白机硬边）
+      // 像素色块感：主体保持纯色，仅最外圈做一次暗角
       const sh = dz > 0.22 ? 1 : 0.55;
       setPx(d, px, py, [
         Math.min(255, (rgb[0] * sh) | 0),
@@ -441,7 +473,7 @@ function drawGlobe(now) {
     }
   }
 
-  // 首都标记：任天堂风格像素旗（弹跳 + 旗帜红白闪烁），位置随球面旋转/缩放移动
+  // 首都标记：琥珀色像素定位环 + 小旗标，位置随球面旋转/缩放移动
   if (highlightCode) {
     const cap = capitals[highlightCode];
     const lat0 = cap ? cap[0] : countryLat[highlightCode];
@@ -454,6 +486,8 @@ function drawGlobe(now) {
         const M = Math.max(1, Math.round(GR / 58)); // 标记随分辨率缩放
         const bounce = Math.round(Math.sin(now / 200) * M);
         const flagCol = pulse > 0.5 ? PAL.flagRed : PAL.hiB; // 旗帜红白闪烁
+        const markerRadius = Math.max(5, Math.round(M * 5 + pulse * 2));
+        drawPixelCircle(d, mx, my + bounce, markerRadius, PAL.markerGlow, .68);
         // 底座
         for (let x = mx - M; x <= mx + M; x++) setPx(d, x, my + bounce, PAL.poleDark);
         // 旗杆
@@ -466,9 +500,9 @@ function drawGlobe(now) {
     }
   }
 
-  // NES 切歌白闪：短暂全屏闪白，随时间淡出
+  // 切歌信号闪烁：短暂提亮，不再整屏爆白
   if (flashUntil > now) {
-    const f = 0.55 * ((flashUntil - now) / 140);
+    const f = 0.18 * ((flashUntil - now) / 140);
     for (let i = 0; i < d.length; i += 4) {
       d[i] = Math.min(255, Math.round(d[i] + (255 - d[i]) * f));
       d[i + 1] = Math.min(255, Math.round(d[i + 1] + (255 - d[i + 1]) * f));
