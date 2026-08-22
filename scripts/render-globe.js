@@ -6,13 +6,17 @@ const zlib = require('zlib');
 const map = JSON.parse(fs.readFileSync('public/map.json', 'utf8'));
 
 const GW = 320, GH = 320, GCX = 160, GCY = 160, GR = 136;
-const ZOOM_MAX = 7, ZOOM_FILL = 0.28;
+const ZOOM_MAX = 1.14;
+const DISPLAY_CODE_ALIASES = { TW: 'CN' };
 const PAL = {
   skyBands: [[4, 12, 23], [5, 20, 34], [7, 31, 45], [10, 43, 52], [13, 55, 57]],
   rim: [53, 148, 140], star: [170, 224, 196],
-  seaDeep: [3, 26, 45], seaMid: [5, 55, 73], seaLit: [17, 101, 105],
-  outline: [9, 33, 42], landDark: [25, 64, 59], land: [53, 119, 96], landLit: [122, 185, 139],
-  hiA: [255, 196, 80], hiB: [255, 240, 174],
+  seaDeep: [3, 18, 34], seaMid: [5, 42, 61], seaLit: [13, 84, 96],
+  seaGrid: [24, 89, 98], seaTexture: [16, 61, 73],
+  coast: [91, 165, 139], countryLine: [21, 78, 70],
+  landDark: [21, 56, 53], land: [46, 108, 88], landLit: [96, 164, 122],
+  landTexture: [68, 133, 103], landGrid: [34, 91, 78],
+  hiA: [255, 196, 80], hiB: [255, 240, 174], hiEdge: [255, 141, 77],
   flagRed: [255, 108, 92], pole: [226, 244, 211], poleDark: [79, 111, 104],
 };
 const capitals = JSON.parse(fs.readFileSync('public/capitals.json', 'utf8'));
@@ -69,22 +73,40 @@ for (const [c, a] of Object.entries(acc)) {
 }
 function countryZoom(code) {
   const area = countryArea[code] || 1;
-  const spanDeg = 2.5 * Math.sqrt(area);
-  return Math.min(ZOOM_MAX, Math.max(1, (180 * ZOOM_FILL) / spanDeg));
+  return Math.min(ZOOM_MAX, Math.max(1, 1.06 + Math.min(.42, Math.sqrt(area) / 42)));
+}
+function displayCodeFor(code) { return DISPLAY_CODE_ALIASES[code] || code; }
+function isHighlightedMapCode(mapCode, activeCode) {
+  return mapCode === activeCode || (activeCode === 'CN' && mapCode === 'TW');
 }
 
-// 陆地描边
-const landBorder = new Uint8Array(map.w * map.h);
+// 海岸线 / 国界边缘 bitmask
+const coastMask = new Uint8Array(map.w * map.h);
+const countryMask = new Uint8Array(map.w * map.h);
 for (let y = 0; y < map.h; y++) for (let x = 0; x < map.w; x++) {
   const c = map.grid.substr((y * map.w + x) * 2, 2);
   if (c === '..') continue;
   const nb = [map.grid.substr((y * map.w + ((x + 1) % map.w)) * 2, 2), map.grid.substr((y * map.w + ((x + map.w - 1) % map.w)) * 2, 2),
               map.grid.substr((((y + 1) % map.h) * map.w + x) * 2, 2), map.grid.substr((((y + map.h - 1) % map.h) * map.w + x) * 2, 2)];
-  if (nb.some((cc) => cc === '..')) landBorder[y * map.w + x] = 1;
+  const idx = y * map.w + x;
+  for (let i = 0; i < nb.length; i++) {
+    if (nb[i] === '..' || nb[i] === '') coastMask[idx] |= 1 << i;
+    else if (nb[i] !== c) countryMask[idx] |= 1 << i;
+  }
+}
+function nearGridLine(value, step = 15, tolerance = .42) {
+  const half = step / 2;
+  const wrapped = ((value + half) % step + step) % step - half;
+  return Math.abs(wrapped) < tolerance;
+}
+function edgeHit(mask, fx, fy) {
+  return ((mask & 1) && fx > .58) || ((mask & 2) && fx < .42) ||
+    ((mask & 4) && fy > .58) || ((mask & 8) && fy < .42);
 }
 
 // 渲染指定国家（转到正面 + 按大小缩放；无格子国家用首都兜底）
 function render(code, zoomOverride) {
+  code = displayCodeFor(code);
   const hasCells = countryLon[code] !== undefined;
   const cap = capitals[code];
   let rot, pitch, zoom;
@@ -95,7 +117,7 @@ function render(code, zoomOverride) {
   } else if (cap) {
     rot = cap[1];
     pitch = cap[0];
-    zoom = zoomOverride || 4;
+    zoom = zoomOverride || 1.08;
   } else {
     return null;
   }
@@ -118,22 +140,34 @@ function render(code, zoomOverride) {
       const dz2 = dy * sinp + dz * cosp;
       const lat = Math.asin(-dy2) * 180 / Math.PI;
       const lon = (((Math.atan2(dx, dz2) * 180 / Math.PI) + rot + 540) % 360) - 180;
-      const gx = Math.min(map.w - 1, Math.max(0, Math.floor((lon + 180) / 360 * map.w)));
-      const gy = Math.min(map.h - 1, Math.max(0, Math.floor((90 - lat) / (180 / map.h))));
+      const mapX = (lon + 180) / 360 * map.w;
+      const mapY = (90 - lat) / 180 * map.h;
+      const gx = Math.min(map.w - 1, Math.max(0, Math.floor(mapX)));
+      const gy = Math.min(map.h - 1, Math.max(0, Math.floor(mapY)));
+      const fx = mapX - Math.floor(mapX), fy = mapY - Math.floor(mapY);
+      const idx = gy * map.w + gx;
       const c = map.grid.substr((gy * map.w + gx) * 2, 2);
+      const graticule = nearGridLine(lat) || nearGridLine(lon);
       let rgb;
       if (c === '..') {
-        rgb = dz > 0.92 ? PAL.seaLit : dz > 0.6 ? PAL.seaMid : PAL.seaDeep;
+        rgb = graticule ? PAL.seaGrid : (((px * 13 + py * 7) & 31) === 0 ? PAL.seaTexture :
+          dz > 0.92 ? PAL.seaLit : dz > 0.6 ? PAL.seaMid : PAL.seaDeep);
       } else {
-        if (c === code) rgb = hiCol;
-        else if (landBorder[gy * map.w + gx]) rgb = PAL.outline;
-        else rgb = dz > 0.92 ? PAL.landLit : dz > 0.6 ? PAL.land : PAL.landDark;
+        const isTarget = isHighlightedMapCode(c, code);
+        const coast = edgeHit(coastMask[idx], fx, fy);
+        const countryEdge = edgeHit(countryMask[idx], fx, fy);
+        if (isTarget) rgb = countryEdge || coast ? PAL.hiEdge : hiCol;
+        else if (coast) rgb = PAL.coast;
+        else if (countryEdge) rgb = PAL.countryLine;
+        else if (graticule) rgb = PAL.landGrid;
+        else rgb = (((px * 7 + py * 11 + gx * 5 + gy * 3) & 47) === 0) ? PAL.landTexture :
+          dz > 0.92 ? PAL.landLit : dz > 0.6 ? PAL.land : PAL.landDark;
       }
-      const sh = dz > 0.22 ? 1 : 0.55;
+      const sh = .68 + dz * .32;
       setPx(px, py, [Math.min(255, (rgb[0] * sh) | 0), Math.min(255, (rgb[1] * sh) | 0), Math.min(255, (rgb[2] * sh) | 0)]);
     }
   }
-  // 首都像素旗标记（与 app.js 一致，随分辨率缩放）
+  // 首都像素定位环（与 app.js 的信号 pin 落点一致）
   const capM = capitals[code];
   const la0 = capM ? capM[0] : countryLat[code];
   const lo0 = capM ? capM[1] : countryLon[code];
@@ -147,10 +181,11 @@ function render(code, zoomOverride) {
   const mx = Math.round(GCX + dxS * Rz);
   const my = Math.round(GCY + dyS * Rz);
   const M = Math.max(1, Math.round(GR / 58));
-  const flagCol = pulse > 0.5 ? PAL.flagRed : PAL.hiB;
-  for (let x = mx - M; x <= mx + M; x++) setPx(x, my, PAL.poleDark);
-  for (let y = my - 1; y >= my - 4 * M; y--) setPx(mx, y, PAL.pole);
-  for (let y = my - 4 * M; y <= my - 2 * M - 1; y++) for (let x = mx + 1; x <= mx + 2 * M; x++) setPx(x, y, flagCol);
+  const signalCol = pulse > 0.5 ? PAL.flagRed : PAL.hiB;
+  const cross = Math.max(3, M * 2);
+  for (let x = mx - cross; x <= mx + cross; x++) setPx(x, my, PAL.poleDark);
+  for (let y = my - cross; y <= my + cross; y++) setPx(mx, y, PAL.poleDark);
+  setPx(mx, my, signalCol);
   return { rot, pitch, zoom, area: countryArea[code], marker: [mx, my] };
 }
 
@@ -218,7 +253,7 @@ function ascii() {
       if (buf[i] === PAL.flagRed[0] && buf[i + 1] === PAL.flagRed[1] && buf[i + 2] === PAL.flagRed[2]) flagPx++;
     }
     const cells = countryArea[code] ? countryArea[code] + '格' : '无格子(首都兜底)';
-    console.log(code + ': ' + cells + ', 缩放=' + info.zoom.toFixed(2) + 'x, 旗标记@(' + info.marker[0] + ',' + info.marker[1] + '), 旗像素=' + flagPx);
+    console.log(code + ': ' + cells + ', 缩放=' + info.zoom.toFixed(2) + 'x, 信号点@(' + info.marker[0] + ',' + info.marker[1] + '), 信号像素=' + flagPx);
   }
   // 德国全景 + 特写
   render('DE', 1);

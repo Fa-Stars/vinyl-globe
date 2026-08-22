@@ -18,6 +18,10 @@ const globeCountry = el('globe-country');
 const globeHint = el('globe-hint');
 const globeLat = el('globe-lat');
 const globeLon = el('globe-lon');
+const globeStage = document.querySelector('.globe-stage');
+const globeSignalCopy = el('globe-signal-copy');
+const globePin = el('globe-pin');
+const globePinCountry = el('globe-pin-country');
 const ledText = el('led-text');
 const btnPlay = el('btn-play');
 
@@ -34,9 +38,12 @@ let skipCount = 0;
 let watchdog = null;
 let autoTimer = null;     // 试听结束自动切换的定时器
 let highlightCode = null; // 当前高亮国家（像素地球仪）
-let flashUntil = 0;       // 切歌信号闪烁结束时间
 let rot = 0;              // 地球仪旋转（经度，度）
 let targetRot = null;     // 要转到的国家经度（null = 空闲自转）
+
+// 地图呈现归属：保留原始网格编码，但在界面上作为同一显示区域处理。
+const DISPLAY_CODE_ALIASES = { TW: 'CN' };
+const DISPLAY_NAMES = { CN: '中国' };
 
 /* ---------------- 工具 ---------------- */
 function codeToFlag(code) {
@@ -62,6 +69,15 @@ function fmtDuration(sec) {
 function fmtCoordinate(value, positive, negative) {
   if (!Number.isFinite(value)) return '--°';
   return Math.abs(value).toFixed(1) + '°' + (value >= 0 ? positive : negative);
+}
+
+function displayCodeFor(code) {
+  return DISPLAY_CODE_ALIASES[code] || code;
+}
+
+function isHighlightedMapCode(code) {
+  return code === highlightCode ||
+    (highlightCode === 'CN' && code === 'TW');
 }
 
 /* ---------------- 音频控制 ---------------- */
@@ -133,9 +149,67 @@ async function fetchSong() {
   return r.json();
 }
 
+const artworkCache = new Map();
+const ARTWORK_CACHE_LIMIT = 24;
+
+function highResArtworkUrl(url) {
+  // iTunes RSS 通常只给 100px 缩略图；同一 CDN 支持更适合唱片尺寸的版本。
+  return url.replace(/\/\d{2,4}x\d{2,4}(?:bb)?(?=\.(?:jpe?g|png)(?:\?|$))/i, '/600x600bb');
+}
+
+function trimArtworkCache() {
+  while (artworkCache.size > ARTWORK_CACHE_LIMIT) {
+    const oldest = artworkCache.keys().next().value;
+    if (!oldest || (current && oldest === current.artwork)) return;
+    artworkCache.delete(oldest);
+  }
+}
+
+function preloadArtwork(url) {
+  if (!url) return Promise.resolve('');
+  const cached = artworkCache.get(url);
+  if (cached) return cached.ready;
+
+  const candidates = [...new Set([highResArtworkUrl(url), url])];
+  const entry = { image: null, resolvedUrl: candidates[0], ready: null };
+  entry.ready = new Promise((resolve) => {
+    let index = 0;
+    const loadCandidate = () => {
+      const image = new Image();
+      entry.image = image;
+      image.decoding = 'async';
+      image.onload = () => {
+        entry.resolvedUrl = candidates[index];
+        resolve(entry.resolvedUrl);
+      };
+      image.onerror = () => {
+        index++;
+        if (index < candidates.length) loadCandidate();
+        else {
+          entry.resolvedUrl = '';
+          resolve('');
+        }
+      };
+      image.src = candidates[index];
+    };
+    loadCandidate();
+  });
+  artworkCache.set(url, entry);
+  trimArtworkCache();
+  return entry.ready;
+}
+
+function artworkUrlFor(url) {
+  const cached = artworkCache.get(url);
+  return cached ? cached.resolvedUrl : highResArtworkUrl(url);
+}
+
 function prefetch() {
   fetching = fetchSong()
-    .then((s) => { nextSong = s; })
+    .then((s) => {
+      nextSong = s;
+      s.artworkReady = preloadArtwork(s.artwork);
+    })
     .catch(() => { nextSong = null; });
 }
 
@@ -168,21 +242,21 @@ function applyCountry(j) {
 // 统一设置"当前国家"：更新高亮、让地球仪转过去并缩放、刷新显示
 function setCountry(code, displayName) {
   code = /^[A-Z]{2}$/.test(code) ? code : null;
+  if (code) code = displayCodeFor(code);
   if (code && map.aliases[code]) code = map.aliases[code];
-  if (code !== highlightCode) flashUntil = performance.now() + 140;
   highlightCode = code; // 保留（即使该国家在地图上没有格子）
   // 定位与缩放：
-  //  - 有领土格子 → 转到国家质心（国家居中），按领土大小缩放
-  //  - 无格子（微型国）→ 用首都坐标定位（首都居中），默认 4x 看周边
+  //  - 优先用首都作为信号点，让“针”而不是稀疏轮廓成为视觉焦点
+  //  - 保持轻微推进，保留周边地理语境
   if (code) {
-    if (countryLon[code] !== undefined) {
-      targetRot = countryLon[code];
-      targetPitch = countryLat[code] || 0;
+    // 像 Spidey Tracker 的 pin 一样，优先把“信号点”（首都）放到中心，
+    // 而不是为了让微小国家的轮廓填满画面而无限放大。
+    const focus = capitals[code] ||
+      (countryLon[code] !== undefined ? [countryLat[code], countryLon[code]] : null);
+    if (focus) {
+      targetRot = focus[1];
+      targetPitch = focus[0] || 0;
       targetZoom = countryZoom(code);
-    } else if (capitals[code]) {
-      targetRot = capitals[code][1];
-      targetPitch = capitals[code][0];
-      targetZoom = 4;
     } else {
       targetRot = null; targetPitch = 0; targetZoom = 1;
     }
@@ -190,7 +264,7 @@ function setCountry(code, displayName) {
     targetRot = null; targetPitch = 0; targetZoom = 1;
   }
   // 显示
-  const name = displayName || (code && map.names[code]) || '未知地区';
+  const name = (code && DISPLAY_NAMES[code]) || displayName || (code && map.names[code]) || '未知地区';
   const flag = codeToFlag(code);
   npCountry.textContent = flag + ' ' + name;
   globeCountry.textContent = flag + ' ' + name;
@@ -200,6 +274,9 @@ function setCountry(code, displayName) {
   globeLat.textContent = fmtCoordinate(lat, 'N', 'S');
   globeLon.textContent = fmtCoordinate(lon, 'E', 'W');
   globeHint.textContent = code ? 'SIGNAL LOCKED · 已锁定' : 'WAITING FOR SIGNAL · 等待定位';
+  globeSignalCopy.textContent = code ? code + ' // TRACKING' : 'WAITING FOR SIGNAL';
+  globePinCountry.textContent = code ? flag + ' ' + name : '——';
+  globePin.classList.toggle('is-visible', Boolean(code));
   return code;
 }
 
@@ -214,14 +291,24 @@ function setSong(s) {
   // 未带国家信息 → 后台解析（MusicBrainz/Bing），完成后地球仪亮起并转过去
   if (!s.countrycode && s.id) pollCountry(s.id);
 
-  // 唱片标签：优先用专辑封面，否则用主题色渐变
+  // 整张唱片与中心标签共用专辑海报；无封面时使用主题渐变
+  let recordArtwork;
   if (s.artwork) {
-    label.style.background =
-      'url("' + s.artwork + '") center / cover no-repeat, #111';
+    recordArtwork = 'url("' + artworkUrlFor(s.artwork) + '")';
   } else {
     const hue = hashHue(s.title + s.artist);
-    label.style.background =
+    recordArtwork =
       'radial-gradient(circle at 32% 30%, hsl(' + hue + ', 72%, 62%), hsl(' + hue + ', 70%, 42%) 70%)';
+  }
+  record.style.setProperty('--record-artwork', recordArtwork);
+  label.style.setProperty('--record-artwork', recordArtwork);
+  if (s.artwork) {
+    (s.artworkReady || preloadArtwork(s.artwork)).then((resolvedUrl) => {
+      if (current !== s || !resolvedUrl) return;
+      const artwork = 'url("' + resolvedUrl + '")';
+      record.style.setProperty('--record-artwork', artwork);
+      label.style.setProperty('--record-artwork', artwork);
+    });
   }
   labelTitle.textContent = s.title;
   labelArtist.textContent = s.artist;
@@ -263,23 +350,28 @@ async function next() {
 const GW = 320, GH = 320;          // 逻辑画布尺寸（高分辨率，CSS 放大 + pixelated）
 const GCX = 160, GCY = 160;        // 球心
 const GR = 136;                    // 球半径（缩放前）
-const ZOOM_MIN = 1, ZOOM_MAX = 7;  // 缩放范围（国家居中，同时能看到周边邻国）
-const ZOOM_FILL = 0.28;            // 目标：国家约占画面高度 28%，保留地缘格局
+const ZOOM_MIN = 1, ZOOM_MAX = 1.14; // 保留全球语境，视觉焦点交给信号 pin
 
 // 夜航控制台配色：深海蓝 + 低饱和陆地 + 琥珀定位信号
 const PAL = {
   skyBands: [[4, 12, 23], [5, 20, 34], [7, 31, 45], [10, 43, 52], [13, 55, 57]],
   rim: [53, 148, 140],
   star: [170, 224, 196],
-  seaDeep: [3, 26, 45],
-  seaMid: [5, 55, 73],
-  seaLit: [17, 101, 105],
-  outline: [9, 33, 42],
-  landDark: [25, 64, 59],
-  land: [53, 119, 96],
-  landLit: [122, 185, 139],
+  seaDeep: [3, 18, 34],
+  seaMid: [5, 42, 61],
+  seaLit: [13, 84, 96],
+  seaGrid: [24, 89, 98],
+  seaTexture: [16, 61, 73],
+  coast: [91, 165, 139],
+  countryLine: [21, 78, 70],
+  landDark: [21, 56, 53],
+  land: [46, 108, 88],
+  landLit: [96, 164, 122],
+  landTexture: [68, 133, 103],
+  landGrid: [34, 91, 78],
   hiA: [255, 196, 80],
   hiB: [255, 240, 174],
+  hiEdge: [255, 141, 77],
   flagRed: [255, 108, 92],
   pole: [226, 244, 211],
   poleDark: [79, 111, 104],
@@ -288,7 +380,8 @@ const PAL = {
 
 let backdrop = null;   // 静态背景（梦幻天空+柔光+星空）
 let frameImg = null;   // 复用的帧缓冲（避免每帧分配内存）
-let landBorder = null; // Uint8Array 陆地描边
+let coastMask = null;  // Uint8Array 海岸线边缘 bitmask
+let countryMask = null; // Uint8Array 国界边缘 bitmask
 let countryLon = {};   // code -> 质心经度（度）
 let countryLat = {};   // code -> 质心纬度（度）
 let countryArea = {};  // code -> 领土格子数（用于缩放）
@@ -307,7 +400,8 @@ function setPx(d, x, y, rgb) {
 // 预计算：陆地描边 + 各国质心
 function buildGlobeData() {
   const W = map.w, H = map.h, grid = map.grid;
-  landBorder = new Uint8Array(W * H);
+  coastMask = new Uint8Array(W * H);
+  countryMask = new Uint8Array(W * H);
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       const c = grid.substr((y * W + x) * 2, 2);
@@ -318,7 +412,12 @@ function buildGlobeData() {
         grid.substr((((y + 1) % H) * W + x) * 2, 2),
         grid.substr((((y + H - 1) % H) * W + x) * 2, 2),
       ];
-      if (nb.some((cc) => cc === '..' || cc === '')) landBorder[y * W + x] = 1;
+      const idx = y * W + x;
+      for (let i = 0; i < nb.length; i++) {
+        const neighbor = nb[i];
+        if (neighbor === '..' || neighbor === '') coastMask[idx] |= 1 << i;
+        else if (neighbor !== c) countryMask[idx] |= 1 << i;
+      }
     }
   }
   const acc = {};
@@ -346,8 +445,9 @@ function buildGlobeData() {
 // 按国家领土大小计算缩放级别（小国放大，大国小放）
 function countryZoom(code) {
   const area = countryArea[code] || 1;
-  const spanDeg = 2.5 * Math.sqrt(area); // 近似角直径（度）
-  const z = (180 * ZOOM_FILL) / spanDeg; // 让国家约占画面 45% 高度
+  // 小国不再被放大成几块孤立像素；所有国家只做轻微的镜头推进，
+  // 具体位置由固定尺寸的信号 pin 和档案卡承担。
+  const z = 1.06 + Math.min(.42, Math.sqrt(area) / 42);
   return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
 }
 
@@ -365,6 +465,19 @@ function drawPixelCircle(d, cx, cy, radius, rgb, alpha) {
     const a = (i / steps) * Math.PI * 2;
     blendPx(d, Math.round(cx + Math.cos(a) * radius), Math.round(cy + Math.sin(a) * radius), rgb, alpha);
   }
+}
+
+function nearGridLine(value, step = 15, tolerance = .42) {
+  const half = step / 2;
+  const wrapped = ((value + half) % step + step) % step - half;
+  return Math.abs(wrapped) < tolerance;
+}
+
+function edgeHit(mask, fx, fy) {
+  return ((mask & 1) && fx > .58) ||
+    ((mask & 2) && fx < .42) ||
+    ((mask & 4) && fy > .58) ||
+    ((mask & 8) && fy < .42);
 }
 
 // 静态背景：深空色带 + 球体边缘细描边 + 低亮度星点
@@ -418,11 +531,28 @@ function countryScreenPos(latDeg, lonDeg) {
   return { x: GCX + dx * Rz, y: GCY + dy * Rz, visible: dz > 0.05 };
 }
 
+function positionGlobePin(pos) {
+  if (!globeStage || !globePin || !pos.visible) {
+    globePin.classList.remove('is-visible');
+    return;
+  }
+  const canvasW = globe.clientWidth || GW;
+  const canvasH = globe.clientHeight || GH;
+  const scaleX = canvasW / GW;
+  const scaleY = canvasH / GH;
+  const offsetX = (globeStage.clientWidth - canvasW) / 2;
+  const offsetY = (globeStage.clientHeight - canvasH) / 2;
+  globePin.style.left = (offsetX + pos.x * scaleX) + 'px';
+  globePin.style.top = (offsetY + pos.y * scaleY) + 'px';
+  globePin.classList.toggle('pin-card-left', pos.x > GW * .58);
+  globePin.classList.add('is-visible');
+}
+
 function drawGlobe(now) {
   if (!frameImg) frameImg = gctx.createImageData(GW, GH);
   const d = frameImg.data;
   if (backdrop) d.set(backdrop.data);
-  if (!map.grid || !landBorder) {
+  if (!map.grid || !coastMask || !countryMask) {
     gctx.putImageData(frameImg, 0, 0);
     return;
   }
@@ -451,20 +581,35 @@ function drawGlobe(now) {
       const dz2 = dy * sinp + dz * cosp;
       const lat = (Math.asin(-dy2) * 180) / Math.PI;
       const lon = (((Math.atan2(dx, dz2) * 180) / Math.PI + rot + 540) % 360) - 180;
-      const gx = Math.min(W - 1, Math.max(0, Math.floor(((lon + 180) / 360) * W)));
-      const gy = Math.min(H - 1, Math.max(0, Math.floor(((90 - lat) / 180) * H)));
+      const mapX = ((lon + 180) / 360) * W;
+      const mapY = ((90 - lat) / 180) * H;
+      const gx = Math.min(W - 1, Math.max(0, Math.floor(mapX)));
+      const gy = Math.min(H - 1, Math.max(0, Math.floor(mapY)));
+      const fx = mapX - Math.floor(mapX);
+      const fy = mapY - Math.floor(mapY);
+      const cellIndex = gy * W + gx;
       const code = grid.substr((gy * W + gx) * 2, 2);
+      const graticule = nearGridLine(lat) || nearGridLine(lon);
 
       let rgb;
       if (code === '..' || code === '') {
-        rgb = dz > 0.92 ? PAL.seaLit : dz > 0.6 ? PAL.seaMid : PAL.seaDeep;
+        rgb = graticule ? PAL.seaGrid :
+          (((px * 13 + py * 7) & 31) === 0 ? PAL.seaTexture :
+            dz > 0.92 ? PAL.seaLit : dz > 0.6 ? PAL.seaMid : PAL.seaDeep);
       } else {
-        if (highlightCode && code === highlightCode) rgb = hiCol;
-        else if (landBorder[gy * W + gx]) rgb = PAL.outline; // 纯黑描边
-        else rgb = dz > 0.92 ? PAL.landLit : dz > 0.6 ? PAL.land : PAL.landDark;
+        const isTarget = highlightCode && isHighlightedMapCode(code);
+        const coast = edgeHit(coastMask[cellIndex], fx, fy);
+        const countryEdge = edgeHit(countryMask[cellIndex], fx, fy);
+        if (isTarget) rgb = countryEdge || coast ? PAL.hiEdge : hiCol;
+        else if (coast) rgb = PAL.coast;
+        else if (countryEdge) rgb = PAL.countryLine;
+        else if (graticule) rgb = PAL.landGrid;
+        else rgb = (((px * 7 + py * 11 + gx * 5 + gy * 3) & 47) === 0)
+          ? PAL.landTexture
+          : dz > 0.92 ? PAL.landLit : dz > 0.6 ? PAL.land : PAL.landDark;
       }
-      // 像素色块感：主体保持纯色，仅最外圈做一次暗角
-      const sh = dz > 0.22 ? 1 : 0.55;
+      // 球面光照：保留像素硬边，但让近地平线不再塌成一圈黑块
+      const sh = .68 + dz * .32;
       setPx(d, px, py, [
         Math.min(255, (rgb[0] * sh) | 0),
         Math.min(255, (rgb[1] * sh) | 0),
@@ -473,7 +618,7 @@ function drawGlobe(now) {
     }
   }
 
-  // 首都标记：琥珀色像素定位环 + 小旗标，位置随球面旋转/缩放移动
+  // 首都标记：像素定位环 + HTML 信号卡，位置随球面旋转/缩放移动
   if (highlightCode) {
     const cap = capitals[highlightCode];
     const lat0 = cap ? cap[0] : countryLat[highlightCode];
@@ -481,34 +626,27 @@ function drawGlobe(now) {
     if (lat0 !== undefined && lon0 !== undefined) {
       const pos = countryScreenPos(lat0, lon0);
       if (pos.visible) {
+        positionGlobePin(pos);
         const mx = Math.round(pos.x);
         const my = Math.round(pos.y);
         const M = Math.max(1, Math.round(GR / 58)); // 标记随分辨率缩放
         const bounce = Math.round(Math.sin(now / 200) * M);
-        const flagCol = pulse > 0.5 ? PAL.flagRed : PAL.hiB; // 旗帜红白闪烁
+        const signalCol = pulse > 0.5 ? PAL.flagRed : PAL.hiB;
         const markerRadius = Math.max(5, Math.round(M * 5 + pulse * 2));
         drawPixelCircle(d, mx, my + bounce, markerRadius, PAL.markerGlow, .68);
-        // 底座
-        for (let x = mx - M; x <= mx + M; x++) setPx(d, x, my + bounce, PAL.poleDark);
-        // 旗杆
-        for (let y = my - 1; y >= my - 4 * M; y--) setPx(d, mx, y + bounce, PAL.pole);
-        // 旗帜（向右展开）
-        for (let y = my - 4 * M; y <= my - 2 * M - 1; y++) {
-          for (let x = mx + 1; x <= mx + 2 * M; x++) setPx(d, x, y + bounce, flagCol);
-        }
+        // 小型像素十字作为 HTML 信号 pin 的“落点”阴影
+        const cross = Math.max(3, M * 2);
+        for (let x = mx - cross; x <= mx + cross; x++) setPx(d, x, my + bounce, PAL.poleDark);
+        for (let y = my - cross; y <= my + cross; y++) setPx(d, mx, y + bounce, PAL.poleDark);
+        setPx(d, mx, my + bounce, signalCol);
       }
+    } else {
+      globePin.classList.remove('is-visible');
     }
+  } else {
+    globePin.classList.remove('is-visible');
   }
 
-  // 切歌信号闪烁：短暂提亮，不再整屏爆白
-  if (flashUntil > now) {
-    const f = 0.18 * ((flashUntil - now) / 140);
-    for (let i = 0; i < d.length; i += 4) {
-      d[i] = Math.min(255, Math.round(d[i] + (255 - d[i]) * f));
-      d[i + 1] = Math.min(255, Math.round(d[i + 1] + (255 - d[i + 1]) * f));
-      d[i + 2] = Math.min(255, Math.round(d[i + 2] + (255 - d[i + 2]) * f));
-    }
-  }
   gctx.putImageData(frameImg, 0, 0);
 }
 
@@ -516,10 +654,10 @@ function updateGlobe() {
   if (targetRot !== null) {
     // 偏航（最短弧） + 俯仰 + 缩放 平滑趋近
     const delta = ((targetRot - rot + 540) % 360) - 180;
-    if (Math.abs(delta) < 0.4) rot = targetRot;
-    else rot += delta * 0.08;             // 转向更干脆（红白机手感）
-    pitch += (targetPitch - pitch) * 0.06;
-    zoom += (targetZoom - zoom) * 0.06;
+    if (Math.abs(delta) < 0.18) rot = targetRot;
+    else rot += delta * 0.048;
+    pitch += (targetPitch - pitch) * 0.042;
+    zoom += (targetZoom - zoom) * 0.042;
   } else {
     rot = (rot + 0.06 + 360) % 360;       // 空闲缓慢自转
     pitch += (0 - pitch) * 0.03;          // 回正

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>世界唱片机 · World Vinyl</title>
-  <link rel="stylesheet" href="style.css?v=9">
+  <link rel="stylesheet" href="style.css?v=15">
 </head>
 <body>
   <div class="stage">
@@ -80,6 +80,18 @@
           <div class="globe-readout globe-readout-top">LAT <span id="globe-lat">--°</span></div>
           <div class="globe-readout globe-readout-right">LON <span id="globe-lon">--°</span></div>
           <canvas id="globe" width="320" height="320"></canvas>
+          <div class="globe-signal-overlay" aria-live="polite">
+            <span class="globe-signal-overlay-kicker">ACTIVE SIGNAL</span>
+            <strong id="globe-signal-copy">WAITING FOR SIGNAL</strong>
+          </div>
+          <div class="globe-pin" id="globe-pin" aria-hidden="true">
+            <span class="globe-pin-cross"></span>
+            <span class="globe-pin-core"></span>
+            <div class="globe-pin-card">
+              <span class="globe-pin-kicker">SIGNAL 01 · LOCKED</span>
+              <strong id="globe-pin-country">——</strong>
+            </div>
+          </div>
           <div class="globe-scanline" aria-hidden="true"></div>
         </div>
 
@@ -101,6 +113,6 @@
   </div>
 
   <audio id="audio" preload="none"></audio>
-  <script src="app.js?v=9"></script>
+  <script src="app.js?v=14"></script>
 </body>
 </html>
