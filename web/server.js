@@ -12,15 +12,20 @@
 //     GET /api/countries       已缓存国家列表
 //     GET /api/info            统计信息
 //  静态：托管 public/
-// 运行：node server.js   （Node >= 18，无任何第三方依赖）
+// 运行：node web/server.js   （Node >= 18，无任何第三方依赖）
 
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const { clearRuntimeCache } = require('../runtime-cache');
 
 const ROOT = __dirname;
-const PUBLIC = path.join(ROOT, 'public');
-const PORT = Number(process.env.PORT || 3000);
+const PROJECT_ROOT = path.resolve(ROOT, '..');
+// Electron 将可写数据放到用户目录；直接运行 node web/server.js 时仍沿用项目内的 data/。
+const DATA_ROOT = path.resolve(process.env.WORLD_VINYL_DATA_DIR || path.join(PROJECT_ROOT, 'data'));
+const PUBLIC = path.resolve(process.env.WORLD_VINYL_PUBLIC_DIR || path.join(ROOT, 'public'));
+const PORT = Number(process.env.PORT || process.env.WORLD_VINYL_PORT || 3000);
+const HOST = process.env.WORLD_VINYL_HOST || '127.0.0.1';
 const UA = 'vinyl-globe/1.0 (world vinyl turntable)';
 const REQ_TIMEOUT = 12000;              // 单次数据源请求超时
 const REFRESH_MS = 12 * 3600 * 1000;    // 每 12 小时整体刷新一次缓存
@@ -28,21 +33,39 @@ const REFRESH_MS = 12 * 3600 * 1000;    // 每 12 小时整体刷新一次缓存
 // ---- 配置：Jamendo client_id（环境变量优先，其次 data/config.json）----
 function loadConfig() {
   try {
-    return JSON.parse(fs.readFileSync(path.join(ROOT, 'data', 'config.json'), 'utf8')) || {};
+    return JSON.parse(fs.readFileSync(path.join(DATA_ROOT, 'config.json'), 'utf8')) || {};
   } catch (e) {
     return {};
   }
 }
 const JAMENDO_ID = (process.env.JAMENDO_CLIENT_ID || loadConfig().jamendoClientId || '').trim();
 const MODE = JAMENDO_ID ? 'jamendo' : 'itunes';
-const SONGS_DIR = path.join(ROOT, 'data', MODE === 'jamendo' ? 'jamendo' : 'songs'); // data/jamendo 或 data/songs
+const SONGS_DIR = path.join(DATA_ROOT, MODE === 'jamendo' ? 'jamendo' : 'songs'); // data/jamendo 或 data/songs
 const INVALID_FILE = path.join(SONGS_DIR, '_invalid.json');
 const POOL_FILE = path.join(SONGS_DIR, 'pool.json'); // Jamendo 全局歌曲池缓存
-const AUDIO_DIR = path.join(ROOT, 'data', 'audio');   // 音频本地缓存（预下载）
+const AUDIO_DIR = path.join(DATA_ROOT, 'audio');   // 音频本地缓存（预下载）
 const URL_MAP_FILE = path.join(AUDIO_DIR, '_urls.json'); // id -> 远程 URL 映射
 const AUDIO_MAX = 60;    // 音频缓存文件数上限（约 60 × 4MB ≈ 240MB）
 const WARM_MAX = 3;      // 同时预下载的并发上限
 const WARM_TARGET = 10;  // 随时保持 10 首歌处于"已下载 / 下载中"，保证换歌流畅
+const COUNTRY_CACHE_TTL = 30 * 86400 * 1000;
+const COUNTRY_NONE_TTL = 7 * 86400 * 1000;
+const COUNTRY_PREFETCH_TARGET = 16; // 与音频预缓存同一批，提前准备国家/地区
+
+let shuttingDown = false;
+function clearCacheBeforeDirectExit() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  clearRuntimeCache(DATA_ROOT, (error) => console.warn('[songs] cache cleanup failed: ' + error.message));
+  console.log('[songs] runtime cache cleared; config.json preserved');
+  process.exit(0);
+}
+
+// Electron 后端由主进程统一清理；直接运行 start.bat 时由这里处理 Ctrl+C/SIGTERM。
+if (process.env.WORLD_VINYL_CLEAR_CACHE_ON_EXIT !== '0') {
+  process.once('SIGINT', clearCacheBeforeDirectExit);
+  process.once('SIGTERM', clearCacheBeforeDirectExit);
+}
 
 // ---------------------------------------------------------------- 国家列表
 // Apple iTunes 商店支持的国家码（ISO 3166-1 alpha-2），附中文名
@@ -166,17 +189,20 @@ function topUpWarm() {
   if (MODE !== 'jamendo') return;
   const inFlight = warmReady.length + warmQueue.length;
   const need = WARM_TARGET - inFlight;
-  if (need <= 0) return;
-  const candidates = jamendoPool.filter(
-    (s) =>
-      s.id &&
-      !warmReady.includes(s.id) &&
-      !warmQueue.includes(s.id) &&
-      !fs.existsSync(audioCachePath(s.id))
-  );
-  shuffle(candidates);
-  for (const s of candidates.slice(0, need)) warmQueue.push(s.id);
-  pumpWarm();
+  if (need > 0) {
+    const candidates = jamendoPool.filter(
+      (s) =>
+        s.id &&
+        !warmReady.includes(s.id) &&
+        !warmQueue.includes(s.id) &&
+        !fs.existsSync(audioCachePath(s.id))
+    );
+    shuffle(candidates);
+    for (const s of candidates.slice(0, need)) warmQueue.push(s.id);
+    pumpWarm();
+  }
+  // 音频预缓存和国家/地区预缓存始终使用同一批“下一首”候选。
+  prefetchUpcomingCountries();
 }
 
 async function pumpWarm() {
@@ -438,7 +464,10 @@ async function fetchJamendoPage(offset) {
 }
 
 async function ensureJamendoPool(force) {
-  if (jamendoPool.length && !force) return jamendoPool;
+  if (jamendoPool.length && !force) {
+    prefetchUpcomingCountries();
+    return jamendoPool;
+  }
   const seen = new Set();
   const all = [];
   for (let offset = 0; offset < 2000 && all.length < POOL_TARGET; offset += 120) {
@@ -482,6 +511,7 @@ async function ensureJamendoPool(force) {
       console.warn('[songs] pool write failed: ' + e.message);
     }
     console.log('[songs] Jamendo pool: ' + all.length + ' full tracks');
+    prefetchUpcomingCountries();
   }
   return all;
 }
@@ -492,7 +522,17 @@ function pickJamendoSong() {
   const readySongs = warmReady
     .map((id) => jamendoPool.find((s) => s.id === id))
     .filter(Boolean);
-  const candidates = readySongs.length ? readySongs : jamendoPool;
+  // 国家预取完成后优先从“音频已缓存 + 国家已知”的交集里选，
+  // 这样歌曲接口返回时前端可以直接同步点亮地球。
+  const knownReady = readySongs.filter((s) => countryRecordForSong(s));
+  const knownPool = jamendoPool.filter((s) => countryRecordForSong(s));
+  const candidates = knownReady.length
+    ? knownReady
+    : knownPool.length
+      ? knownPool
+      : readySongs.length
+        ? readySongs
+        : jamendoPool;
   for (let i = 0; i < 10; i++) {
     const s = candidates[randomIndex(candidates.length)];
     const key = s.title + '|' + s.artist;
@@ -629,13 +669,70 @@ function loadInvalidSet() {
 // 链路：MusicBrainz（结构化，限速 1req/s）→ Bing 搜索（cn.bing.com 可达）多数投票
 // 结果缓存到 data/artist-countries.json，30 天内不重复搜索
 // ================================================================
-const ARTIST_COUNTRY_FILE = path.join(ROOT, 'data', 'artist-countries.json');
+const ARTIST_COUNTRY_FILE = path.join(DATA_ROOT, 'artist-countries.json');
 let artistCountry = {};   // artistName -> {code, country, source, ts}
 let countryQueue = [];    // 后台回填队列
+const countryQueued = new Set();
 let countryPumping = false;
 const inflightCountry = {}; // artistName -> Promise（去重）
 const mbRef = { v: 0 };
 const bingRef = { v: 0 };
+let poolSaveTimer = null;
+
+function normalizeArtistName(name) {
+  return String(name || '').trim().replace(/\s+/g, ' ');
+}
+
+function cachedArtistCountry(name) {
+  const raw = String(name || '').trim();
+  const key = normalizeArtistName(raw);
+  return artistCountry[key] || artistCountry[raw] || null;
+}
+
+function isFreshCountryRecord(rec) {
+  return Boolean(rec && rec.ts && Date.now() - rec.ts < COUNTRY_CACHE_TTL);
+}
+
+function countryRecordForSong(song) {
+  const cached = cachedArtistCountry(song && song.artist);
+  if (isFreshCountryRecord(cached) && cached.code) return cached;
+  const code = String((song && song.countrycode) || '').toUpperCase();
+  if (/^[A-Z]{2}$/.test(code) && COUNTRY_NAMES[code]) {
+    return {
+      code,
+      country: song.country || COUNTRY_NAMES[code],
+      source: 'pool',
+      ts: 0,
+    };
+  }
+  return null;
+}
+
+function scheduleJamendoPoolSave() {
+  if (MODE !== 'jamendo' || poolSaveTimer || !jamendoPool.length) return;
+  poolSaveTimer = setTimeout(() => {
+    poolSaveTimer = null;
+    try {
+      fs.mkdirSync(SONGS_DIR, { recursive: true });
+      fs.writeFileSync(POOL_FILE, JSON.stringify(jamendoPool));
+    } catch (e) { /* ignore */ }
+  }, 250);
+}
+
+function annotatePoolCountry(artist, rec) {
+  if (MODE !== 'jamendo' || !rec || !rec.code) return;
+  const key = normalizeArtistName(artist);
+  let changed = false;
+  for (const song of jamendoPool) {
+    if (normalizeArtistName(song.artist) !== key) continue;
+    if (song.countrycode !== rec.code || song.country !== rec.country) {
+      song.countrycode = rec.code;
+      song.country = rec.country || COUNTRY_NAMES[rec.code] || '未知地区';
+      changed = true;
+    }
+  }
+  if (changed) scheduleJamendoPoolSave();
+}
 
 const CN_NAMES = {
   美国:'US',英国:'GB',法国:'FR',德国:'DE',日本:'JP',澳大利亚:'AU',加拿大:'CA',俄罗斯:'RU',
@@ -790,10 +887,10 @@ async function bingLookup(name) {
 
 // 解析单个艺术家国籍（去重 + 缓存 + 30 天有效期）
 function resolveArtistCountry(name) {
-  const key = String(name || '').trim();
+  const key = normalizeArtistName(name);
   if (!key) return Promise.resolve(null);
-  const cached = artistCountry[key];
-  if (cached && Date.now() - cached.ts < 30 * 86400 * 1000) {
+  const cached = cachedArtistCountry(key);
+  if (isFreshCountryRecord(cached)) {
     return Promise.resolve(cached.code ? cached : null);
   }
   if (inflightCountry[key]) return inflightCountry[key];
@@ -812,10 +909,48 @@ function resolveArtistCountry(name) {
     };
     artistCountry[key] = rec;
     saveArtistCountries();
+    annotatePoolCountry(key, rec);
     return code ? rec : null;
   })().finally(() => { delete inflightCountry[key]; });
   inflightCountry[key] = p;
   return p;
+}
+
+function queueCountryArtist(name, priority) {
+  if (MODE !== 'jamendo') return;
+  const key = normalizeArtistName(name);
+  if (!key) return;
+  const prepared = jamendoPool.find((song) =>
+    normalizeArtistName(song.artist) === key && countryRecordForSong(song)
+  );
+  if (prepared) return;
+  const cached = cachedArtistCountry(key);
+  if (isFreshCountryRecord(cached)) return;
+  if (cached && cached.source === 'none' && cached.ts && Date.now() - cached.ts < COUNTRY_NONE_TTL) return;
+  if (inflightCountry[key] || countryQueued.has(key)) return;
+  countryQueued.add(key);
+  if (priority) countryQueue.unshift(key);
+  else countryQueue.push(key);
+  pumpCountryQueue();
+}
+
+function prefetchUpcomingCountries() {
+  if (MODE !== 'jamendo' || !jamendoPool.length) return;
+  const preferredIds = [...warmReady, ...warmQueue];
+  const preferred = [];
+  const used = new Set();
+  for (const id of preferredIds) {
+    const song = jamendoPool.find((s) => s.id === id);
+    if (song && !used.has(song.id)) {
+      used.add(song.id);
+      preferred.push(song);
+    }
+  }
+  const remaining = jamendoPool.filter((song) => !used.has(song.id));
+  shuffle(remaining);
+  for (const song of preferred.concat(remaining.slice(0, COUNTRY_PREFETCH_TARGET))) {
+    queueCountryArtist(song.artist, true);
+  }
 }
 
 // 后台回填：把歌曲池里所有未解析的艺术家都查一遍
@@ -823,15 +958,11 @@ function backfillArtistCountries() {
   if (MODE !== 'jamendo') return;
   const seen = new Set();
   for (const s of jamendoPool) {
-    const k = String(s.artist || '').trim();
+    const k = normalizeArtistName(s.artist);
     if (!k || seen.has(k)) continue;
     seen.add(k);
-    const cached = artistCountry[k];
-    if (cached && Date.now() - cached.ts < 30 * 86400 * 1000) continue;
-    if (cached && cached.source === 'none' && Date.now() - cached.ts < 7 * 86400 * 1000) continue;
-    countryQueue.push(k);
+    queueCountryArtist(k, false);
   }
-  pumpCountryQueue();
 }
 
 async function pumpCountryQueue() {
@@ -850,6 +981,7 @@ async function pumpCountryQueue() {
           ' (known=' + Object.keys(artistCountry).filter((k) => artistCountry[k].code).length + ')');
       }
     } catch (e) { /* ignore */ }
+    countryQueued.delete(key);
   }
   countryPumping = false;
   const known = Object.keys(artistCountry).filter((k) => artistCountry[k].code).length;
@@ -910,14 +1042,14 @@ function handleApi(req, res, pathname, urlObj) {
         consumeWarm(s.id); // 这首歌被取走，从就绪列表移除
         topUpWarm();       // 立刻补一首新的进预下载流水线
       }
-      // 国家信息：已解析的直接带上；未解析的后台开查（前端再通过 /api/country 获取）
+      // 国家信息：预取完成的直接带上；未解析的只入优先队列，避免播放时临时联网。
       if (MODE === 'jamendo' && s.artist) {
-        const rec = artistCountry[String(s.artist).trim()];
-        if (rec && rec.code) {
+        const rec = countryRecordForSong(s);
+        if (rec) {
           out.countrycode = rec.code;
           out.country = rec.country || COUNTRY_NAMES[rec.code] || out.country;
         } else {
-          resolveArtistCountry(s.artist).catch(() => {});
+          queueCountryArtist(s.artist, true);
         }
       }
       json(res, 200, out);
@@ -946,7 +1078,9 @@ function handleApi(req, res, pathname, urlObj) {
     const id = (urlObj.searchParams.get('id') || '').trim();
     const song = jamendoPool.find((s) => s.id === id);
     if (!song) { json(res, 404, { error: 'unknown song' }); return; }
-    resolveArtistCountry(song.artist).then((rec) => {
+    const cached = countryRecordForSong(song);
+    const result = cached ? Promise.resolve(cached) : resolveArtistCountry(song.artist);
+    result.then((rec) => {
       json(res, 200, {
         id: song.id,
         artist: song.artist,
@@ -1055,12 +1189,14 @@ const server = http.createServer((req, res) => {
       for (const id of cached) if (!warmReady.includes(id)) warmReady.push(id);
       console.log('[audio] ' + warmReady.length + ' songs already cached on disk');
     } catch (e) { /* ignore */ }
-    // 启动 10 首预下载流水线（后台执行，不阻塞启动）
+    // 启动音频与国家/地区双预取流水线（均后台执行，不阻塞启动）。
     topUpWarm();
-    ensureJamendoPool().catch((e) =>
+    ensureJamendoPool().then(() => {
+      topUpWarm();
+      prefetchUpcomingCountries();
+      backfillArtistCountries();
+    }).catch((e) =>
       console.error('[songs] pool fetch failed: ' + e.message));
-    // 后台解析艺术家国籍（MusicBrainz + Bing，限速执行）
-    setTimeout(backfillArtistCountries, 3000);
   } else {
     // iTunes 模式：从磁盘载入已有缓存（秒级）
     let loaded = 0;
@@ -1085,7 +1221,11 @@ const server = http.createServer((req, res) => {
       console.log('[songs] refreshing Jamendo pool…');
       jamendoPool = [];
       try { fs.unlinkSync(POOL_FILE); } catch (e) { /* ignore */ }
-      ensureJamendoPool().then(topUpWarm).catch((e) =>
+      ensureJamendoPool().then(() => {
+        topUpWarm();
+        prefetchUpcomingCountries();
+        backfillArtistCountries();
+      }).catch((e) =>
         console.error('[songs] pool refresh failed: ' + e.message));
     } else {
       console.log('[songs] refreshing all country charts…');
@@ -1099,8 +1239,8 @@ const server = http.createServer((req, res) => {
     }
   }, REFRESH_MS);
 
-  server.listen(PORT, () => {
-    console.log('[server] World Vinyl running at http://localhost:' + PORT);
+  server.listen(PORT, HOST, () => {
+    console.log('[server] World Vinyl running at http://' + HOST + ':' + PORT);
     console.log('[server] press R on the page to skip to a random song from a random country');
   });
 })();

@@ -2,18 +2,56 @@
 
 一个把“随机听歌”和“环游世界”结合起来的浏览器唱片机。每次切换歌曲时，唱片封面、歌曲信息和像素雷达地球会同步更新，帮助你从音乐开始认识不同国家。
 
+> 实体化目标与原型规格见 [PRODUCT_BRIEF.md](PRODUCT_BRIEF.md)。
+
+## 功能亮点
+
+- 随机播放来自不同国家的歌曲，并显示艺术家、专辑和地区信息。
+- 黑胶唱片使用整张歌曲海报作为外围图像，唱片按 **15 秒一圈**旋转，中心信息区域保持稳定。
+- 唱片封面会提前预加载；iTunes 封面优先使用高清版本，失败时自动回退到原图。
+- 像素雷达地球包含海岸线、国界、经纬网、陆地纹理、球体明暗和雷达扫描效果。
+- 小国家不会被放大成零散像素点，而是通过首都信号点和信息卡清晰展示。
+- 切换国家使用平滑过渡，不再出现突然闪光。
+- 项目显示规则会将 `TW` 与 `CN` 统一归入“中国”区域显示；底层地图网格编码仍保留原始数据。
+
 ## 运行
 
 要求：Node.js ≥ 18（无任何第三方依赖）。
 
 ```bash
 cd vinyl-globe
-node server.js
+node web/server.js
 ```
 
 打开 http://localhost:3000
 
-也可以在 Windows 下双击 `start.bat` 启动。
+也可以在 Windows 下双击 `web/start.bat` 启动。
+
+### Electron 桌面程序
+
+项目现在也支持打包为 Windows 桌面程序。开发运行前先安装 Electron 依赖：
+
+```bash
+npm install
+npm start
+```
+
+生成安装版和免安装版 `.exe`：
+
+```bash
+npm run dist
+```
+
+产物会出现在 `desktop/release/`。桌面程序启动时会自动运行本地服务并打开内置窗口，
+不需要用户另外安装 Node.js 或手动打开浏览器。也可以双击 `desktop/start.bat` 运行开发版。
+
+#### 在程序内填写 Jamendo client_id
+
+打开窗口顶部的「Jamendo 设置」，输入从 Jamendo 开发者后台获取的 `client_id`，
+点击「保存并重启服务」即可切换到完整歌曲模式；清空后保存则恢复 iTunes 30 秒试听模式。
+
+凭证和运行缓存保存在 Windows 用户数据目录下，不会打包进 exe，也不会写入安装目录。
+公开发布安装包时仍建议不要把个人凭证预先放进用户数据目录或环境变量中。
 
 > 首次访问时，后台会自动抓取各国家的歌曲（约 1~2 分钟跑完全部国家，
 > 期间页面立即可用：先随机到已就绪的国家）。歌曲按国家缓存到 `data/songs/`（或 `data/jamendo/`），
@@ -25,7 +63,7 @@ node server.js
 
 1. 打开 https://devportal.jamendo.com 免费注册，登录后创建应用，复制 `client_id`
 2. 将 `data/config.example.json` 复制为 `data/config.json`，再把 key 填入 `jamendoClientId` 字段（或设置环境变量 `JAMENDO_CLIENT_ID`）
-3. 重启 `node server.js`，即自动切换为 **Jamendo 全曲模式**
+3. 重启 `node web/server.js`，即自动切换为 **Jamendo 全曲模式**
 
 Jamendo 是正版免费（Creative Commons）音乐平台，返回**完整 mp3**，
 并按**艺术家国籍**过滤——正好驱动像素地球的国家高亮。未配置 key 时自动回退到 iTunes 试听模式。
@@ -56,7 +94,7 @@ Jamendo 是正版免费（Creative Commons）音乐平台，返回**完整 mp3**
                                                        └────────────────────────────┘
 ```
 
-- **数据源双模式**（`server.js` 按 `JAMENDO_CLIENT_ID` 是否配置自动切换）：
+- **数据源双模式**（`web/server.js` 按 `JAMENDO_CLIENT_ID` 是否配置自动切换）：
   - **Jamendo（全曲）**：`https://api.jamendo.com/v3.0/tracks/?client_id=…&order=popularity_total&audioformat=mp32`
     按热度分页拉取**全局歌曲池**（约 840 首完整 mp3，CORS 开放可直接网页播放），随机选曲。
   - **iTunes（试听兜底）**：`https://itunes.apple.com/{国家码}/rss/topsongs/limit=100/json`，
@@ -72,13 +110,13 @@ Jamendo 是正版免费（Creative Commons）音乐平台，返回**完整 mp3**
   不误标记）；榜单只有一首歌时 Apple 返回单个对象而非数组，已做归一化处理。
 - **提速**：歌曲池常驻内存/磁盘，热请求毫秒级返回；服务器维护一个小型预取流水线，
   并优先返回已经缓存的歌曲，减少切换时的等待。
-- **像素雷达地球**（`public/map.json` + `public/capitals.json`）：由 Natural Earth 110m 国界数据栅格化成
+- **像素雷达地球**（`web/public/map.json` + `web/public/capitals.json`）：由 Natural Earth 110m 国界数据栅格化成
   144×72 的国家编码网格（每格约 2.5°×2.5°），浏览器端用 Canvas 绘制深色球体、海岸线、低对比度国界、
   经纬网、陆地纹理、扫描线和雷达扫掠。播放到某国时，地球会平滑定位，高亮该国并显示信号卡片；
   小国家使用首都信号点，不再依赖放大成一大片像素。空闲时地球缓慢自转。
 - **唱片视觉**：歌曲海报铺满唱片外围区域，并叠加细微沟槽纹理和高光；外围图像每 15 秒旋转一圈，
   中心圆形信息区域保持稳定。下一首歌曲的封面会提前预加载，并优先尝试 iTunes 高清封面。
-- 重新生成地图：`node scripts/build-map.js`；渲染预览：`node scripts/render-globe.js`。
+- 重新生成地图：`node web/scripts/build-map.js`；渲染预览：`node web/scripts/render-globe.js`。
 
 ## API
 
@@ -90,21 +128,31 @@ Jamendo 是正版免费（Creative Commons）音乐平台，返回**完整 mp3**
 | `GET /api/info` | 模式与缓存统计（`mode: jamendo/itunes`、歌曲数） |
 | `GET /api/countries` | 已缓存国家列表（仅 iTunes 模式有数据） |
 
+## 缓存生命周期
+
+程序正常退出时会清理歌曲、音频、Jamendo/iTunes 歌曲池、艺术家国家信息和地球图片等运行时缓存；`data/config.json` 会保留，因此已输入的 Jamendo `client_id` 不会丢失。Electron 关闭窗口和直接运行 `web/start.bat` 后按 Ctrl+C 都支持该清理逻辑。
+
 ## 目录结构
 
 ```
 vinyl-globe/
-├── server.js            # 后端：歌曲爬取（Jamendo/iTunes）+ 随机选歌 API + 静态服务
-├── public/
-│   ├── index.html       # 唱片机页面
-│   ├── style.css        # 唱片机 / 像素地球样式
-│   ├── app.js           # 前端逻辑（R 键切换、音频、地球渲染）
-│   ├── map.json         # 144×72 国家编码栅格（像素地球数据）
-│   └── capitals.json    # 国家首都坐标
-├── scripts/
-│   ├── build-map.js     # 由 Natural Earth GeoJSON 生成 map.json
-│   ├── render-globe.js   # 生成地球预览图
-│   └── check-palette.js  # 检查预览图色板
+├── web/
+│   ├── server.js        # 网页版后端：歌曲爬取 + API + 静态服务
+│   ├── start.bat        # 网页版启动脚本
+│   ├── public/          # 网页版前端
+│   │   ├── index.html   # 唱片机页面
+│   │   ├── style.css    # 唱片机 / 像素地球样式
+│   │   ├── app.js       # 前端逻辑（R 键切换、音频、地球渲染）
+│   │   ├── map.json     # 144×72 国家编码栅格（像素地球数据）
+│   │   └── capitals.json # 国家首都坐标
+│   └── scripts/         # 网页版地图生成和预览工具
+├── desktop/
+│   ├── electron/        # Electron 主进程和退出清理逻辑
+│   ├── start.bat        # 桌面版开发启动脚本
+│   └── release/         # EXE 与 ZIP 安装包
+├── package.json         # Electron 开发/打包配置
+├── package-lock.json
+├── runtime-cache.js     # 两种启动方式共用的退出清理逻辑
 └── data/
     ├── config.example.json # Jamendo 配置模板
     ├── songs/              # iTunes 试听缓存

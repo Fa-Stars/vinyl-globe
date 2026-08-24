@@ -11,7 +11,7 @@
 ## 运行
 
 ```bash
-node server.js        # 或 Windows 下双击 start.bat
+node web/server.js     # 或 Windows 下双击 web/start.bat
 # 打开 http://localhost:3000
 ```
 
@@ -23,22 +23,22 @@ node server.js        # 或 Windows 下双击 start.bat
 
 | 想改什么 | 文件 | 关键位置 |
 | --- | --- | --- |
-| **地球配色**（星露谷风格） | `public/app.js` | `PAL` 常量（天空/海/陆地/高亮/旗子颜色） |
-| **地球分辨率/画布大小** | `public/app.js` | `GW/GH/GCX/GCY/GR` 常量 |
-| **缩放逻辑**（国家占画面比例） | `public/app.js` | `ZOOM_FILL`、`ZOOM_MAX`、`countryZoom()` |
-| **旋转速度/缓动** | `public/app.js` | `updateGlobe()`（0.05 / 0.03 系数） |
-| **旋转到国家（俯仰/偏航）** | `public/app.js` | `setCountry()`、`countryScreenPos()` |
-| **首都像素旗标记样式** | `public/app.js` | `drawGlobe()` 末尾的旗子绘制段 |
-| **背景**（渐变天空/柔光/星星） | `public/app.js` | `buildBackdrop()` |
-| **高亮闪烁颜色/频率** | `public/app.js` | `PAL.hiA/hiB`、`drawGlobe()` 的 `pulse` |
-| **球体渲染算法**（投影/明暗） | `public/app.js` | `drawGlobe()` 主体循环 |
-| **页面布局/唱片机造型** | `public/index.html` + `public/style.css` | 全部 |
-| **地球卡片边框/标题条** | `public/style.css` | `.globe-card`、`#globe` |
-| **地图数据**（144×72 国家网格） | `scripts/build-map.js` | 重跑生成 `public/map.json` |
-| **首都坐标数据** | `public/capitals.json` | 国家码 → [纬度, 经度] |
-| **后端 API / 歌曲池 / 音频缓存 / 国家解析** | `server.js` | 见下方说明 |
+| **地球配色**（星露谷风格） | `web/public/app.js` | `PAL` 常量（天空/海/陆地/高亮/旗子颜色） |
+| **地球分辨率/画布大小** | `web/public/app.js` | `GW/GH/GCX/GCY/GR` 常量 |
+| **缩放逻辑**（国家占画面比例） | `web/public/app.js` | `ZOOM_FILL`、`ZOOM_MAX`、`countryZoom()` |
+| **旋转速度/缓动** | `web/public/app.js` | `updateGlobe()`（0.05 / 0.03 系数） |
+| **旋转到国家（俯仰/偏航）** | `web/public/app.js` | `setCountry()`、`countryScreenPos()` |
+| **首都像素旗标记样式** | `web/public/app.js` | `drawGlobe()` 末尾的旗子绘制段 |
+| **背景**（渐变天空/柔光/星星） | `web/public/app.js` | `buildBackdrop()` |
+| **高亮闪烁颜色/频率** | `web/public/app.js` | `PAL.hiA/hiB`、`drawGlobe()` 的 `pulse` |
+| **球体渲染算法**（投影/明暗） | `web/public/app.js` | `drawGlobe()` 主体循环 |
+| **页面布局/唱片机造型** | `web/public/index.html` + `web/public/style.css` | 全部 |
+| **地球卡片边框/标题条** | `web/public/style.css` | `.globe-card`、`#globe` |
+| **地图数据**（144×72 国家网格） | `web/scripts/build-map.js` | 重跑生成 `web/public/map.json` |
+| **首都坐标数据** | `web/public/capitals.json` | 国家码 → [纬度, 经度] |
+| **后端 API / 歌曲池 / 音频缓存 / 国家解析** | `web/server.js` | 见下方说明 |
 
-## 像素地球渲染管线（`public/app.js`）
+## 像素地球渲染管线（`web/public/app.js`）
 
 1. **数据**：`map.json`（144×72 网格，每格 2 字符国家码，`..` 为海）
    + `capitals.json`（首都坐标）
@@ -64,8 +64,8 @@ node server.js        # 或 Windows 下双击 start.bat
 
 ## 本地改动的验证方法
 
-- 页面：`node server.js` 后浏览器打开 http://localhost:3000
-- **像素地球专项**：`node scripts/render-globe.js`
+- 页面：`node web/server.js` 后浏览器打开 http://localhost:3000
+- **像素地球专项**：`node web/scripts/render-globe.js`
   —— 无需浏览器即可把地球渲染成 `data/globe-*.png` 检查效果
   （脚本与 `app.js` 渲染逻辑一致，改完 `app.js` 记得同步改它）
 - 注意：前端改动后浏览器要 **Ctrl+F5** 强刷（静态资源已设 `no-cache`，
@@ -75,17 +75,21 @@ node server.js        # 或 Windows 下双击 start.bat
 
 ```
 vinyl-globe/
-├── server.js            # 后端：歌曲池、音频缓存、国家解析、API、静态服务
-├── start.bat            # Windows 一键启动
-├── public/              # 前端（纯静态）
-│   ├── index.html       # 唱片机页面
-│   ├── style.css        # 样式（唱片机 + 地球卡片）
-│   ├── app.js           # 前端逻辑（地球渲染在这里！）
-│   ├── map.json         # 144×72 国家编码网格（像素地球数据）
-│   └── capitals.json    # 世界首都坐标
-├── scripts/
-│   ├── build-map.js     # 由 Natural Earth GeoJSON 生成 map.json
-│   └── render-globe.js  # 地球渲染预览工具（出 PNG）
+├── web/
+│   ├── server.js        # 网页版后端：歌曲池、音频缓存、国家解析、API
+│   ├── start.bat        # 网页版一键启动
+│   ├── public/          # 前端（纯静态）
+│   │   ├── index.html   # 唱片机页面
+│   │   ├── style.css    # 样式（唱片机 + 地球卡片）
+│   │   ├── app.js       # 前端逻辑（地球渲染在这里！）
+│   │   ├── map.json     # 144×72 国家编码网格（像素地球数据）
+│   │   └── capitals.json # 世界首都坐标
+│   └── scripts/         # 地图生成与地球预览工具
+├── desktop/
+│   ├── electron/        # Electron 主进程
+│   ├── start.bat        # 桌面版启动脚本
+│   └── release/         # EXE 与 ZIP 安装包
+├── runtime-cache.js     # 两种启动方式共用的退出清理逻辑
 └── data/                # 运行缓存（可删，会自动重建）
     ├── config.json      # Jamendo key 配置
     ├── jamendo/pool.json        # 歌曲池缓存
@@ -102,7 +106,7 @@ vinyl-globe/
 - `data/config.json` 里的 Jamendo key 是账号凭证：**已被 .gitignore 排除，不会进入仓库**。
   - 克隆仓库后需要先 `copy data\config.example.json data\config.json` 并填入自己的 key
   - 发给协作者没问题（免费），公开仓库请用对方自己的 key
-- 改 `app.js` 的地球部分后，同步更新 `scripts/render-globe.js` 保持一致，
+- 改 `web/public/app.js` 的地球部分后，同步更新 `web/scripts/render-globe.js` 保持一致，
   便于离线预览。
 
 ## Git 协作

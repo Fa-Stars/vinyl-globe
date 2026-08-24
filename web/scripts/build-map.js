@@ -2,15 +2,15 @@
 // Build the pixelated world map used by the front-end globe.
 // Rasterizes Natural Earth 110m admin-0 countries into a W x H grid where
 // every cell holds the 2-letter ISO code of the country covering it (".." = sea).
-// Output: public/map.json  (fetched by the browser)
+// Output: web/public/map.json  (fetched by the browser)
 
 const fs = require('fs');
 const path = require('path');
 
-const ROOT = path.join(__dirname, '..');
+const ROOT = path.join(__dirname, '..', '..');
 const GEO_URL = 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_0_countries.geojson';
 const GEO_FILE = path.join(ROOT, 'data', 'ne_110m_admin_0_countries.geojson');
-const OUT = path.join(ROOT, 'public', 'map.json');
+const OUT = path.join(ROOT, 'web', 'public', 'map.json');
 
 const W = 144; // cells per row  (2.5 deg per cell)
 const H = 72;  // rows          (2.5 deg per cell)

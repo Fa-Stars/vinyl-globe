@@ -10,6 +10,10 @@ data/config.json
 
 # ---- 系统/编辑器 ----
 node_modules/
+.npm-cache/
+.electron-cache/
+release/
+release-verify/
 *.log
 .DS_Store
 Thumbs.db

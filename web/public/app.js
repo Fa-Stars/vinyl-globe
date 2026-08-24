@@ -24,6 +24,14 @@ const globePin = el('globe-pin');
 const globePinCountry = el('globe-pin-country');
 const ledText = el('led-text');
 const btnPlay = el('btn-play');
+const settingsButton = el('settings-button');
+const settingsModal = el('settings-modal');
+const settingsClose = el('settings-close');
+const settingsCancel = el('settings-cancel');
+const settingsSave = el('settings-save');
+const settingsToggleKey = el('settings-toggle-key');
+const settingsClientId = el('jamendo-client-id');
+const settingsStatus = el('settings-status');
 
 const globe = document.getElementById('globe');
 const gctx = globe.getContext('2d');
@@ -58,6 +66,67 @@ function hashHue(str) {
 }
 
 function setStatus(text) { npStatus.textContent = text; }
+
+function setSettingsStatus(text, isError) {
+  settingsStatus.textContent = text || '';
+  settingsStatus.style.color = isError ? '#ff8d7b' : '';
+}
+
+function closeSettings() {
+  settingsModal.hidden = true;
+  settingsSave.disabled = false;
+  settingsCancel.disabled = false;
+  settingsToggleKey.disabled = false;
+}
+
+async function openSettings() {
+  settingsModal.hidden = false;
+  setSettingsStatus('');
+  settingsClientId.disabled = false;
+  settingsSave.disabled = false;
+  settingsCancel.disabled = false;
+  settingsToggleKey.disabled = false;
+  if (!window.electronAPI) {
+    settingsClientId.disabled = true;
+    settingsSave.disabled = true;
+    settingsToggleKey.disabled = true;
+    setSettingsStatus('请在 Electron 桌面程序中打开此设置入口。', true);
+    return;
+  }
+  try {
+    const settings = await window.electronAPI.getSettings();
+    settingsClientId.value = settings.jamendoClientId || '';
+    setSettingsStatus(settings.mode === 'jamendo' ? '当前模式：Jamendo 全曲' : '当前模式：iTunes 30 秒试听');
+    settingsClientId.focus();
+  } catch (error) {
+    setSettingsStatus('读取设置失败，请重试。', true);
+  }
+}
+
+async function saveSettings() {
+  if (!window.electronAPI) return;
+  settingsSave.disabled = true;
+  settingsCancel.disabled = true;
+  settingsToggleKey.disabled = true;
+  setSettingsStatus('正在保存并重启本地服务，请稍候…');
+  try {
+    const result = await window.electronAPI.saveJamendoClientId(settingsClientId.value);
+    if (!result || !result.ok) {
+      setSettingsStatus((result && result.error) || '保存失败，请重试。', true);
+      settingsSave.disabled = false;
+      settingsCancel.disabled = false;
+      settingsToggleKey.disabled = false;
+      return;
+    }
+    setSettingsStatus(result.mode === 'jamendo' ? '已切换到 Jamendo 全曲模式，正在刷新…' : '已切换到 iTunes 试听模式，正在刷新…');
+    setTimeout(() => window.location.reload(), 350);
+  } catch (error) {
+    setSettingsStatus('保存失败，请重试。', true);
+    settingsSave.disabled = false;
+    settingsCancel.disabled = false;
+    settingsToggleKey.disabled = false;
+  }
+}
 
 function fmtDuration(sec) {
   if (!sec || sec <= 0) return '';
@@ -689,6 +758,21 @@ window.addEventListener('keydown', (e) => {
 btnPlay.addEventListener('click', () => { started = true; togglePlay(); });
 el('btn-next').addEventListener('click', () => { started = true; next(); });
 record.addEventListener('click', () => { started = true; togglePlay(); });
+settingsButton.addEventListener('click', openSettings);
+settingsClose.addEventListener('click', closeSettings);
+settingsCancel.addEventListener('click', closeSettings);
+settingsSave.addEventListener('click', saveSettings);
+settingsToggleKey.addEventListener('click', () => {
+  const showing = settingsClientId.type === 'text';
+  settingsClientId.type = showing ? 'password' : 'text';
+  settingsToggleKey.textContent = showing ? '显示' : '隐藏';
+});
+settingsModal.addEventListener('click', (event) => {
+  if (event.target === settingsModal) closeSettings();
+});
+window.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !settingsModal.hidden) closeSettings();
+});
 
 /* ---------------- 启动 ---------------- */
 (async function init() {

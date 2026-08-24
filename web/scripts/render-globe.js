@@ -1,9 +1,11 @@
 'use strict';
 // 临时工具：渲染像素地球 PNG 供目视检查（与 app.js 逻辑一致，无第三方依赖）
 const fs = require('fs');
+const path = require('path');
 const zlib = require('zlib');
 
-const map = JSON.parse(fs.readFileSync('public/map.json', 'utf8'));
+const WEB_ROOT = path.resolve(__dirname, '..');
+const map = JSON.parse(fs.readFileSync(path.join(WEB_ROOT, 'public', 'map.json'), 'utf8'));
 
 const GW = 320, GH = 320, GCX = 160, GCY = 160, GR = 136;
 const ZOOM_MAX = 1.14;
@@ -19,7 +21,7 @@ const PAL = {
   hiA: [255, 196, 80], hiB: [255, 240, 174], hiEdge: [255, 141, 77],
   flagRed: [255, 108, 92], pole: [226, 244, 211], poleDark: [79, 111, 104],
 };
-const capitals = JSON.parse(fs.readFileSync('public/capitals.json', 'utf8'));
+const capitals = JSON.parse(fs.readFileSync(path.join(WEB_ROOT, 'public', 'capitals.json'), 'utf8'));
 const buf = Buffer.alloc(GW * GH * 4);
 const setPx = (x, y, rgb) => {
   if (x < 0 || x >= GW || y < 0 || y >= GH) return;

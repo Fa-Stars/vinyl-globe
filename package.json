@@ -1,0 +1,55 @@
+{
+  "name": "world-vinyl",
+  "version": "1.0.0",
+  "description": "世界唱片机 · World Vinyl desktop player",
+  "author": "World Vinyl",
+  "main": "desktop/electron/main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder --win nsis portable"
+  },
+  "devDependencies": {
+    "electron": "^38.0.0",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "com.worldvinyl.desktop",
+    "productName": "World Vinyl",
+    "artifactName": "World-Vinyl-${version}-${arch}.${ext}",
+    "directories": {
+      "output": "desktop/release"
+    },
+    "files": [
+      "desktop/electron/**/*",
+      "web/server.js",
+      "web/public/**/*",
+      "runtime-cache.js",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "web/server.js",
+      "web/public/**/*",
+      "runtime-cache.js"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        },
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}

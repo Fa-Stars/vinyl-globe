@@ -12,7 +12,31 @@
     <header class="topbar">
       <h1 class="title">🌍 世界唱片机 <span class="title-en">WORLD VINYL</span></h1>
       <p class="subtitle">随机播放来自世界任意一个角落的歌曲 —— 按下 <kbd>R</kbd> 切换</p>
+      <button class="settings-button" id="settings-button" type="button">⚙ Jamendo 设置</button>
     </header>
+
+    <div class="settings-modal" id="settings-modal" hidden>
+      <section class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <button class="settings-close" id="settings-close" type="button" aria-label="关闭">×</button>
+        <div class="settings-eyebrow">DESKTOP SETTINGS · 桌面设置</div>
+        <h2 id="settings-title">Jamendo 全曲播放</h2>
+        <p class="settings-copy">
+          输入 Jamendo 应用的 <code>client_id</code> 后，程序会切换到完整歌曲模式。
+          留空则使用 iTunes 的 30 秒试听。没有凭证？<a href="https://devportal.jamendo.com" target="_blank" rel="noopener">打开 Jamendo 开发者后台</a>。
+        </p>
+        <label class="settings-label" for="jamendo-client-id">Jamendo client_id</label>
+        <div class="settings-input-row">
+          <input id="jamendo-client-id" type="password" inputmode="text" autocomplete="off" spellcheck="false" placeholder="例如：123456789">
+          <button class="settings-secondary" id="settings-toggle-key" type="button">显示</button>
+        </div>
+        <p class="settings-hint">凭证只保存在本机用户目录，不会写入公开的 exe。</p>
+        <p class="settings-status" id="settings-status" aria-live="polite"></p>
+        <div class="settings-actions">
+          <button class="settings-secondary" id="settings-cancel" type="button">取消</button>
+          <button class="settings-primary" id="settings-save" type="button">保存并重启服务</button>
+        </div>
+      </section>
+    </div>
 
     <main class="layout">
       <!-- 左侧：唱片机 -->
