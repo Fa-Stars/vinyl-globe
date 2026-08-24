@@ -128,6 +128,8 @@ async function startBackend(portOverride) {
     JAMENDO_CLIENT_ID: '',
     // Electron 主进程会在后端退出后统一清理，避免后端重启时误删缓存。
     WORLD_VINYL_CLEAR_CACHE_ON_EXIT: '0',
+    // Desktop 窗口生命周期由 Electron 管理，不启用 Web 页面会话退出逻辑。
+    WORLD_VINYL_BROWSER_LIFECYCLE: '0',
     WORLD_VINYL_DATA_DIR: dataRoot(),
     WORLD_VINYL_PUBLIC_DIR: publicRoot(),
     WORLD_VINYL_HOST: '127.0.0.1',

@@ -58,9 +58,11 @@ node web/server.js     # 或 Windows 下双击 web/start.bat
 | 端点 | 说明 |
 | --- | --- |
 | `GET /api/song` | 随机一首歌 `{title, artist, album, streamUrl, artwork, duration, countrycode, country, id}` |
-| `GET /api/country?id=…` | 解析该歌艺术家的国籍（MusicBrainz + Bing，结果缓存 30 天） |
+| `GET /api/country?id=…` | 解析该歌艺术家的国籍（MusicBrainz，结果缓存 30 天；无法确认时返回未知） |
 | `GET /api/info` | 模式与统计 |
 | `GET /audio/{id}` | 本地音频（缓存命中秒开，未命中转发 Jamendo 并后台缓存） |
+| `POST /api/audio/played?id=…` | 播放结束后删除该歌曲的本地音频缓存，保留歌曲池和远程 URL 元数据 |
+| `POST /api/client-session` | Web 页面会话心跳；最后一个页面关闭后触发后端退出和缓存清理（仅直接 Web 模式） |
 
 ## 本地改动的验证方法
 
@@ -101,7 +103,7 @@ vinyl-globe/
 
 ## 注意事项
 
-- `data/` 下都是**运行时缓存**：删掉会重新生成（音频缓存会重新下载，约几分钟）；
+- `data/` 下的歌曲、音频、歌曲池和艺术家国家文件都是**运行时缓存**：程序退出时会自动清理，删掉也会重新生成（音频缓存会重新下载，约几分钟）；`data/config.json` 属于配置，会保留；
   改前端/后端时无需动它们。
 - `data/config.json` 里的 Jamendo key 是账号凭证：**已被 .gitignore 排除，不会进入仓库**。
   - 克隆仓库后需要先 `copy data\config.example.json data\config.json` 并填入自己的 key
@@ -111,8 +113,8 @@ vinyl-globe/
 
 ## Git 协作
 
-- 仓库已初始化，提交内容：全部代码 + 文档 + `map.json`/`capitals.json`/`artist-countries.json`
-- 不入库：`data/audio`、`data/songs`、`data/jamendo`、`data/config.json`、地图源 GeoJSON
+- 仓库已初始化，提交内容：全部代码 + 文档 + `map.json`/`capitals.json`
+- 不入库：`data/audio`、`data/songs`、`data/jamendo`、`data/artist-countries.json`、`data/config.json`、地图源 GeoJSON
 - 推送到 GitHub：
   ```bash
   git remote add origin https://github.com/<你的用户名>/<仓库名>.git

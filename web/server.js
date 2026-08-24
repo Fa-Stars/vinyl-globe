@@ -1,7 +1,7 @@
 'use strict';
 // 世界唱片机 —— 后端
 //  数据源（双模式）：
-//    ① Jamendo（推荐，全曲播放）：正版免费 CC 音乐，按"艺术家国籍"过滤，返回完整 mp3。
+//    ① Jamendo（推荐，全曲播放）：正版免费 CC 音乐，从全局热门池随机返回完整 mp3。
 //       需要免费 client_id：https://devportal.jamendo.com 注册后创建应用即可获取，
 //       填入 data/config.json 的 jamendoClientId 字段，或设环境变量 JAMENDO_CLIENT_ID。
 //    ② iTunes RSS（兜底，30 秒试听）：各国热门歌曲榜，无需 key。
@@ -29,6 +29,11 @@ const HOST = process.env.WORLD_VINYL_HOST || '127.0.0.1';
 const UA = 'vinyl-globe/1.0 (world vinyl turntable)';
 const REQ_TIMEOUT = 12000;              // 单次数据源请求超时
 const REFRESH_MS = 12 * 3600 * 1000;    // 每 12 小时整体刷新一次缓存
+// Jamendo 没有艺术家国籍字段；只有 MusicBrainz 的结构化结果可作为国家依据。
+// 搜索引擎摘要容易把无关网页中的国家名误当成艺术家国籍。
+const TRUSTED_COUNTRY_SOURCE = 'mb';
+const CACHEABLE_COUNTRY_SOURCES = new Set([TRUSTED_COUNTRY_SOURCE, 'none']);
+const COUNTRY_RESOLVER_VERSION = 2;
 
 // ---- 配置：Jamendo client_id（环境变量优先，其次 data/config.json）----
 function loadConfig() {
@@ -48,23 +53,111 @@ const URL_MAP_FILE = path.join(AUDIO_DIR, '_urls.json'); // id -> 远程 URL 映
 const AUDIO_MAX = 60;    // 音频缓存文件数上限（约 60 × 4MB ≈ 240MB）
 const WARM_MAX = 3;      // 同时预下载的并发上限
 const WARM_TARGET = 10;  // 随时保持 10 首歌处于"已下载 / 下载中"，保证换歌流畅
+const WARM_READY_WAIT_MS = 5000; // 缓存刚启动时，最多等一首就绪再返回歌曲
 const COUNTRY_CACHE_TTL = 30 * 86400 * 1000;
 const COUNTRY_NONE_TTL = 7 * 86400 * 1000;
 const COUNTRY_PREFETCH_TARGET = 16; // 与音频预缓存同一批，提前准备国家/地区
 
 let shuttingDown = false;
+let cacheCleared = false;
+
+function clearRuntimeCacheOnce(reportErrors) {
+  if (cacheCleared) return 0;
+  cacheCleared = true;
+  return clearRuntimeCache(
+    DATA_ROOT,
+    reportErrors ? (error) => console.warn('[songs] cache cleanup failed: ' + error.message) : undefined,
+  );
+}
+
 function clearCacheBeforeDirectExit() {
   if (shuttingDown) return;
   shuttingDown = true;
-  clearRuntimeCache(DATA_ROOT, (error) => console.warn('[songs] cache cleanup failed: ' + error.message));
-  console.log('[songs] runtime cache cleared; config.json preserved');
+  const removed = clearRuntimeCacheOnce(true);
+  console.log('[songs] runtime cache cleared; config.json preserved (' + removed + ' entries)');
   process.exit(0);
 }
 
-// Electron 后端由主进程统一清理；直接运行 start.bat 时由这里处理 Ctrl+C/SIGTERM。
+// Electron 后端由主进程统一清理；直接运行 start.bat 时处理 Ctrl+C、关闭窗口等退出路径。
 if (process.env.WORLD_VINYL_CLEAR_CACHE_ON_EXIT !== '0') {
-  process.once('SIGINT', clearCacheBeforeDirectExit);
-  process.once('SIGTERM', clearCacheBeforeDirectExit);
+  // Windows 关闭控制台窗口会发送 SIGHUP；Ctrl+Break 使用 SIGBREAK。
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK']) {
+    try {
+      process.once(signal, clearCacheBeforeDirectExit);
+    } catch (error) {
+      // 当前平台不支持该信号时忽略，exit 事件仍会提供同步兜底。
+    }
+  }
+
+  // 无法捕获的异常退出路径也会触发 exit；这里不能做异步工作，所以清理函数必须同步。
+  process.once('exit', () => clearRuntimeCacheOnce(false));
+}
+
+// 直接 Web 模式还要感知浏览器页面是否全部关闭；Electron 由主进程管理窗口生命周期。
+const BROWSER_LIFECYCLE =
+  process.env.WORLD_VINYL_BROWSER_LIFECYCLE === '1' ||
+  (process.env.WORLD_VINYL_BROWSER_LIFECYCLE !== '0' && process.env.WORLD_VINYL_CLEAR_CACHE_ON_EXIT !== '0');
+const BROWSER_SESSION_TTL = 45 * 1000;
+const BROWSER_SHUTDOWN_GRACE = 1500;
+const browserSessions = new Map();
+let browserSessionSeen = false;
+let browserShutdownTimer = null;
+let browserSessionSweep = null;
+
+function isValidBrowserSessionId(id) {
+  return /^[A-Za-z0-9_-]{8,128}$/.test(id);
+}
+
+function cancelBrowserShutdown() {
+  if (!browserShutdownTimer) return;
+  clearTimeout(browserShutdownTimer);
+  browserShutdownTimer = null;
+}
+
+function shutdownAfterBrowserClose() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  const removed = clearRuntimeCacheOnce(true);
+  console.log('[songs] browser window closed; runtime cache cleared; config.json preserved (' + removed + ' entries)');
+  if (browserSessionSweep) clearInterval(browserSessionSweep);
+  const forceExit = setTimeout(() => process.exit(0), 1000);
+  forceExit.unref();
+  server.close(() => process.exit(0));
+}
+
+function scheduleBrowserShutdown() {
+  if (!BROWSER_LIFECYCLE || !browserSessionSeen || shuttingDown || browserSessions.size || browserShutdownTimer) return;
+  browserShutdownTimer = setTimeout(() => {
+    browserShutdownTimer = null;
+    if (!browserSessions.size) shutdownAfterBrowserClose();
+  }, BROWSER_SHUTDOWN_GRACE);
+  browserShutdownTimer.unref();
+}
+
+function sweepBrowserSessions() {
+  const cutoff = Date.now() - BROWSER_SESSION_TTL;
+  for (const [id, lastSeen] of browserSessions) {
+    if (lastSeen < cutoff) browserSessions.delete(id);
+  }
+  scheduleBrowserShutdown();
+}
+
+function updateBrowserSession(id, state) {
+  if (!BROWSER_LIFECYCLE || !isValidBrowserSessionId(id)) return;
+  if (state === 'disconnect') {
+    browserSessions.delete(id);
+    scheduleBrowserShutdown();
+    return;
+  }
+  browserSessionSeen = true;
+  browserSessions.set(id, Date.now());
+  cancelBrowserShutdown();
+}
+
+if (BROWSER_LIFECYCLE) {
+  sweepBrowserSessions();
+  browserSessionSweep = setInterval(sweepBrowserSessions, 15 * 1000);
+  browserSessionSweep.unref();
 }
 
 // ---------------------------------------------------------------- 国家列表
@@ -130,6 +223,8 @@ let jamendoPool = []; // Jamendo 模式：全局歌曲池（完整 mp3）
 let urlMap = {};     // id -> {url, type}
 let warmQueue = [];  // 待预下载的 id 队列
 let warmActive = 0;
+const warmInFlight = new Set();
+const playedAudioIds = new Set();
 let warmReady = [];  // 已完整缓存的 id（可秒开，优先返回）
 
 function loadUrlMap() {
@@ -172,7 +267,7 @@ function audioCachePath(id) {
 // 预下载：把歌曲音频缓存到本地（并发受限，后台执行）
 function warmAudio(id) {
   const entry = urlMap[id];
-  if (!entry || warmQueue.includes(id)) return;
+  if (!entry || warmQueue.includes(id) || warmInFlight.has(id)) return;
   if (fs.existsSync(audioCachePath(id))) return; // 已有缓存
   warmQueue.push(id);
   pumpWarm();
@@ -184,10 +279,27 @@ function consumeWarm(id) {
   if (i !== -1) warmReady.splice(i, 1);
 }
 
+function clearPlayedAudio(id) {
+  if (!/^[A-Za-z0-9_-]+$/.test(id)) return false;
+  playedAudioIds.add(id);
+  warmReady = warmReady.filter((readyId) => readyId !== id);
+  warmQueue = warmQueue.filter((queuedId) => queuedId !== id);
+  let removed = false;
+  for (const file of [audioCachePath(id), audioCachePath(id) + '.tmp']) {
+    try {
+      fs.unlinkSync(file);
+      removed = true;
+    } catch (error) {
+      if (error.code !== 'ENOENT') console.warn('[audio] played cache cleanup failed: ' + error.message);
+    }
+  }
+  return removed;
+}
+
 // 维持"始终有 WARM_TARGET 首歌在下载/已下载"的流水线
 function topUpWarm() {
   if (MODE !== 'jamendo') return;
-  const inFlight = warmReady.length + warmQueue.length;
+  const inFlight = warmReady.length + warmQueue.length + warmActive;
   const need = WARM_TARGET - inFlight;
   if (need > 0) {
     const candidates = jamendoPool.filter(
@@ -195,6 +307,7 @@ function topUpWarm() {
         s.id &&
         !warmReady.includes(s.id) &&
         !warmQueue.includes(s.id) &&
+        !warmInFlight.has(s.id) &&
         !fs.existsSync(audioCachePath(s.id))
     );
     shuffle(candidates);
@@ -211,7 +324,9 @@ async function pumpWarm() {
     const entry = urlMap[id];
     if (!entry) continue;
     warmActive++;
+    warmInFlight.add(id);
     warmAudioTask(id, entry).finally(() => {
+      warmInFlight.delete(id);
       warmActive--;
       pumpWarm();
     });
@@ -242,7 +357,15 @@ async function warmAudioTask(id, entry) {
       out.on('error', reject);
       out.end();
     });
+    if (playedAudioIds.has(id)) {
+      try { fs.unlinkSync(tmp); } catch (e) { /* ignore */ }
+      return;
+    }
     fs.renameSync(tmp, target);
+    if (playedAudioIds.has(id)) {
+      try { fs.unlinkSync(target); } catch (e) { /* ignore */ }
+      return;
+    }
     if (!warmReady.includes(id)) warmReady.push(id);
     evictOldest();
     console.log('[audio] cached ' + id + ' (' + (fs.statSync(target).size / 1024).toFixed(0) + 'KB, ready=' + warmReady.length + ')');
@@ -526,22 +649,34 @@ function pickJamendoSong() {
   // 这样歌曲接口返回时前端可以直接同步点亮地球。
   const knownReady = readySongs.filter((s) => countryRecordForSong(s));
   const knownPool = jamendoPool.filter((s) => countryRecordForSong(s));
+  // 音频可立即播放优先于国家信息完整；否则已知国家的冷歌曲会造成切歌长时间缓冲。
   const candidates = knownReady.length
     ? knownReady
-    : knownPool.length
-      ? knownPool
-      : readySongs.length
-        ? readySongs
+    : readySongs.length
+      ? readySongs
+      : knownPool.length
+        ? knownPool
         : jamendoPool;
   for (let i = 0; i < 10; i++) {
     const s = candidates[randomIndex(candidates.length)];
     const key = s.title + '|' + s.artist;
     if (key !== state.lastKey) {
       state.lastKey = key;
+      playedAudioIds.delete(s.id);
       return s;
     }
   }
-  return candidates[randomIndex(candidates.length)];
+  const s = candidates[randomIndex(candidates.length)];
+  if (s) playedAudioIds.delete(s.id);
+  return s;
+}
+
+async function waitForWarmAudio() {
+  if (MODE !== 'jamendo' || warmReady.length || (!warmActive && !warmQueue.length)) return;
+  const deadline = Date.now() + WARM_READY_WAIT_MS;
+  while (!warmReady.length && (warmActive || warmQueue.length) && Date.now() < deadline) {
+    await sleep(100);
+  }
 }
 
 // 取某国歌曲：内存 → 磁盘 → 网络（惰性，瞬时失败自动重试一次）
@@ -603,7 +738,10 @@ function pickCountryCode() {
 }
 
 async function pickSong() {
-  if (MODE === 'jamendo') return pickJamendoSong();
+  if (MODE === 'jamendo') {
+    await waitForWarmAudio();
+    return pickJamendoSong();
+  }
   for (let tries = 0; tries < 12; tries++) {
     let code = pickCountryCode();
     if (code === state.lastCountry) code = pickCountryCode();
@@ -666,8 +804,8 @@ function loadInvalidSet() {
 
 // ================================================================
 // 艺术家国籍解析（让像素地球高亮"歌曲来自哪个国家"）
-// 链路：MusicBrainz（结构化，限速 1req/s）→ Bing 搜索（cn.bing.com 可达）多数投票
-// 结果缓存到 data/artist-countries.json，30 天内不重复搜索
+// 只采信 MusicBrainz 的结构化结果；无法确认时保持未知，避免把搜索摘要中的国家名误当成国籍。
+// 结果缓存到 data/artist-countries.json，30 天内不重复查询
 // ================================================================
 const ARTIST_COUNTRY_FILE = path.join(DATA_ROOT, 'artist-countries.json');
 let artistCountry = {};   // artistName -> {code, country, source, ts}
@@ -676,7 +814,6 @@ const countryQueued = new Set();
 let countryPumping = false;
 const inflightCountry = {}; // artistName -> Promise（去重）
 const mbRef = { v: 0 };
-const bingRef = { v: 0 };
 let poolSaveTimer = null;
 
 function normalizeArtistName(name) {
@@ -690,14 +827,47 @@ function cachedArtistCountry(name) {
 }
 
 function isFreshCountryRecord(rec) {
-  return Boolean(rec && rec.ts && Date.now() - rec.ts < COUNTRY_CACHE_TTL);
+  return Boolean(
+    rec &&
+    rec.resolverVersion === COUNTRY_RESOLVER_VERSION &&
+    rec.ts &&
+    Date.now() - rec.ts < COUNTRY_CACHE_TTL
+  );
+}
+
+function isTrustedCountryRecord(rec) {
+  return Boolean(
+    rec &&
+    rec.source === TRUSTED_COUNTRY_SOURCE &&
+    rec.resolverVersion === COUNTRY_RESOLVER_VERSION
+  );
+}
+
+function isFreshCountryAnnotation(song) {
+  const ts = Number(song && song.countryResolvedAt);
+  return Boolean(
+    song &&
+    song.countryResolverVersion === COUNTRY_RESOLVER_VERSION &&
+    Number.isFinite(ts) &&
+    ts > 0 &&
+    Date.now() - ts < COUNTRY_CACHE_TTL
+  );
 }
 
 function countryRecordForSong(song) {
   const cached = cachedArtistCountry(song && song.artist);
-  if (isFreshCountryRecord(cached) && cached.code) return cached;
+  if (isFreshCountryRecord(cached) && cached.code && isTrustedCountryRecord(cached)) {
+    return cached;
+  }
   const code = String((song && song.countrycode) || '').toUpperCase();
-  if (/^[A-Z]{2}$/.test(code) && COUNTRY_NAMES[code]) {
+  // 旧版池文件只有 countrycode/country，没有来源和时间戳，不能继续信任。
+  if (
+    song &&
+    song.countrySource === TRUSTED_COUNTRY_SOURCE &&
+    isFreshCountryAnnotation(song) &&
+    /^[A-Z]{2}$/.test(code) &&
+    COUNTRY_NAMES[code]
+  ) {
     return {
       code,
       country: song.country || COUNTRY_NAMES[code],
@@ -720,97 +890,101 @@ function scheduleJamendoPoolSave() {
 }
 
 function annotatePoolCountry(artist, rec) {
-  if (MODE !== 'jamendo' || !rec || !rec.code) return;
+  if (MODE !== 'jamendo') return;
   const key = normalizeArtistName(artist);
   let changed = false;
   for (const song of jamendoPool) {
     if (normalizeArtistName(song.artist) !== key) continue;
-    if (song.countrycode !== rec.code || song.country !== rec.country) {
+    if (!rec || !rec.code || !isTrustedCountryRecord(rec)) {
+      if (
+        song.countrycode ||
+        song.country !== '未知地区' ||
+        song.countrySource ||
+        song.countryResolvedAt ||
+        song.countryResolverVersion
+      ) {
+        song.countrycode = '';
+      song.country = '未知地区';
+      delete song.countrySource;
+      delete song.countryResolvedAt;
+      delete song.countryResolverVersion;
+      changed = true;
+      }
+      continue;
+    }
+    if (
+      song.countrycode !== rec.code ||
+      song.country !== rec.country ||
+      song.countrySource !== TRUSTED_COUNTRY_SOURCE ||
+      song.countryResolvedAt !== rec.ts
+    ) {
       song.countrycode = rec.code;
       song.country = rec.country || COUNTRY_NAMES[rec.code] || '未知地区';
+      song.countrySource = TRUSTED_COUNTRY_SOURCE;
+      song.countryResolvedAt = rec.ts;
+      song.countryResolverVersion = COUNTRY_RESOLVER_VERSION;
       changed = true;
     }
   }
   if (changed) scheduleJamendoPoolSave();
 }
 
-const CN_NAMES = {
-  美国:'US',英国:'GB',法国:'FR',德国:'DE',日本:'JP',澳大利亚:'AU',加拿大:'CA',俄罗斯:'RU',
-  意大利:'IT',西班牙:'ES',荷兰:'NL',瑞典:'SE',挪威:'NO',丹麦:'DK',芬兰:'FI',波兰:'PL',
-  乌克兰:'UA',奥地利:'AT',瑞士:'CH',比利时:'BE',葡萄牙:'PT',巴西:'BR',墨西哥:'MX',
-  阿根廷:'AR',智利:'CL',哥伦比亚:'CO',秘鲁:'PE',委内瑞拉:'VE',印度:'IN',印度尼西亚:'ID',
-  泰国:'TH',越南:'VN',韩国:'KR',中国:'CN',新加坡:'SG',马来西亚:'MY',菲律宾:'PH',
-  土耳其:'TR',希腊:'GR',以色列:'IL',伊朗:'IR',埃及:'EG',南非:'ZA',尼日利亚:'NG',
-  肯尼亚:'KE',新西兰:'NZ',爱尔兰:'IE',捷克:'CZ',匈牙利:'HU',罗马尼亚:'RO',克罗地亚:'HR',
-  塞尔维亚:'RS',保加利亚:'BG',斯洛伐克:'SK',斯洛文尼亚:'SI',爱沙尼亚:'EE',拉脱维亚:'LV',
-  立陶宛:'LT',冰岛:'IS',卢森堡:'LU',马耳他:'MT',塞浦路斯:'CY',白俄罗斯:'BY',摩尔多瓦:'MD',
-  亚美尼亚:'AM',格鲁吉亚:'GE',阿塞拜疆:'AZ',哈萨克斯坦:'KZ',乌兹别克斯坦:'UZ',蒙古:'MN',
-  巴基斯坦:'PK',孟加拉国:'BD',斯里兰卡:'LK',尼泊尔:'NP',古巴:'CU',牙买加:'JM',巴拿马:'PA',
-  哥斯达黎加:'CR',乌拉圭:'UY',巴拉圭:'PY',玻利维亚:'BO',厄瓜多尔:'EC',摩洛哥:'MA',
-  阿尔及利亚:'DZ',突尼斯:'TN',黎巴嫩:'LB',约旦:'JO',沙特阿拉伯:'SA',阿联酋:'AE',
-  卡塔尔:'QA',科威特:'KW',伊拉克:'IQ',摩纳哥:'MC',安道尔:'AD',列支敦士登:'LI',
-};
-
-const EN_NAMES = {
-  'United States':'US','United Kingdom':'GB','USA':'US','France':'FR','Germany':'DE',
-  'Japan':'JP','Australia':'AU','Canada':'CA','Russia':'RU','Italy':'IT','Spain':'ES',
-  'Netherlands':'NL','Sweden':'SE','Norway':'NO','Denmark':'DK','Finland':'FI','Poland':'PL',
-  'Ukraine':'UA','Austria':'AT','Switzerland':'CH','Belgium':'BE','Portugal':'PT','Brazil':'BR',
-  'Mexico':'MX','Argentina':'AR','Chile':'CL','Colombia':'CO','Peru':'PE','Venezuela':'VE',
-  'India':'IN','Indonesia':'ID','Thailand':'TH','Vietnam':'VN','South Korea':'KR','Korea':'KR',
-  'China':'CN','Singapore':'SG','Malaysia':'MY','Philippines':'PH','Turkey':'TR','Greece':'GR',
-  'Israel':'IL','Iran':'IR','Egypt':'EG','South Africa':'ZA','Nigeria':'NG','Kenya':'KE',
-  'New Zealand':'NZ','Ireland':'IE','Czech Republic':'CZ','Czechia':'CZ','Hungary':'HU',
-  'Romania':'RO','Croatia':'HR','Serbia':'RS','Bulgaria':'BG','Slovakia':'SK','Slovenia':'SI',
-  'Estonia':'EE','Latvia':'LV','Lithuania':'LT','Iceland':'IS','Luxembourg':'LU','Malta':'MT',
-  'Cyprus':'CY','Belarus':'BY','Moldova':'MD','Armenia':'AM','Georgia':'GE','Azerbaijan':'AZ',
-  'Kazakhstan':'KZ','Uzbekistan':'UZ','Mongolia':'MN','Pakistan':'PK','Bangladesh':'BD',
-  'Sri Lanka':'LK','Nepal':'NP','Cuba':'CU','Jamaica':'JM','Panama':'PA','Costa Rica':'CR',
-  'Uruguay':'UY','Paraguay':'PY','Bolivia':'BO','Ecuador':'EC','Morocco':'MA','Algeria':'DZ',
-  'Tunisia':'TN','Lebanon':'LB','Jordan':'JO','Saudi Arabia':'SA','UAE':'AE','Qatar':'QA',
-  'Kuwait':'KW','Iraq':'IQ','Scotland':'GB','England':'GB','Wales':'GB','Puerto Rico':'US',
-};
-
-const EN_ADJ = {
-  American:'US','British':'GB','English':'GB','Scottish':'GB','Welsh':'GB','French':'FR',
-  German:'DE','Japanese':'JP','Australian':'AU','Canadian':'CA','Russian':'RU','Italian':'IT',
-  Spanish:'ES','Dutch':'NL','Swedish':'SE','Norwegian':'NO','Danish':'DK','Finnish':'FI',
-  Polish:'PL','Ukrainian':'UA','Austrian':'AT','Swiss':'CH','Belgian':'BE','Portuguese':'PT',
-  Brazilian:'BR','Mexican':'MX','Argentine':'AR','Argentinian':'AR','Chilean':'CL',
-  Colombian:'CO','Peruvian':'PE','Venezuelan':'VE','Indian':'IN','Indonesian':'ID','Thai':'TH',
-  Vietnamese:'VN','South Korean':'KR','Korean':'KR','Chinese':'CN','Singaporean':'SG',
-  Malaysian:'MY','Filipino':'PH','Turkish':'TR','Greek':'GR','Israeli':'IL','Iranian':'IR',
-  Egyptian:'EG','South African':'ZA','Nigerian':'NG','Kenyan':'KE','New Zealander':'NZ',
-  Irish:'IE','Czech':'CZ','Hungarian':'HU','Romanian':'RO','Croatian':'HR','Serbian':'RS',
-  Bulgarian:'BG','Slovak':'SK','Slovenian':'SI','Estonian':'EE','Latvian':'LV','Lithuanian':'LT',
-  Icelandic:'IS','Luxembourgish':'LU','Maltese':'MT','Cypriot':'CY','Belarusian':'BY',
-  Moldovan:'MD','Armenian':'AM','Georgian':'GE','Azerbaijani':'AZ','Kazakh':'KZ','Uzbek':'UZ',
-  Mongolian:'MN','Pakistani':'PK','Bangladeshi':'BD','Sri Lankan':'LK','Nepalese':'NP',
-  Cuban:'CU','Jamaican':'JM','Panamanian':'PA','Costa Rican':'CR','Uruguayan':'UY',
-  Paraguayan:'PY','Bolivian':'BO','Ecuadorian':'EC','Moroccan':'MA','Algerian':'DZ',
-  Tunisian:'TN','Lebanese':'LB','Jordanian':'JO','Saudi':'SA','Emirati':'AE','Qatari':'QA',
-  Kuwaiti:'KW','Iraqi':'IQ','Mexican':'MX',
-};
-
-function extractCountryFromText(text) {
-  if (!text) return null;
-  for (const [name, code] of Object.entries(CN_NAMES)) {
-    if (text.includes(name)) return code;
+function clearUntrustedPoolCountry(song) {
+  if (
+    !song.countrycode &&
+    song.country === '未知地区' &&
+    !song.countrySource &&
+    !song.countryResolvedAt &&
+    !song.countryResolverVersion
+  ) {
+    return false;
   }
-  for (const [name, code] of Object.entries(EN_NAMES)) {
-    if (new RegExp('\\b' + name + '\\b', 'i').test(text)) return code;
+  song.countrycode = '';
+  song.country = '未知地区';
+  delete song.countrySource;
+  delete song.countryResolvedAt;
+  delete song.countryResolverVersion;
+  return true;
+}
+
+function sanitizeLoadedJamendoPool() {
+  let changed = false;
+  for (const song of jamendoPool) {
+    const code = String(song.countrycode || '').toUpperCase();
+    const trusted =
+      song.countrySource === TRUSTED_COUNTRY_SOURCE &&
+      song.countryResolverVersion === COUNTRY_RESOLVER_VERSION &&
+      isFreshCountryAnnotation(song) &&
+      /^[A-Z]{2}$/.test(code) &&
+      COUNTRY_NAMES[code];
+    if (!trusted) changed = clearUntrustedPoolCountry(song) || changed;
   }
-  for (const [adj, code] of Object.entries(EN_ADJ)) {
-    if (new RegExp('\\b' + adj + '\\b', 'i').test(text)) return code;
-  }
-  return null;
+  return changed;
 }
 
 function loadArtistCountries() {
+  let loaded = {};
   try {
-    artistCountry = JSON.parse(fs.readFileSync(ARTIST_COUNTRY_FILE, 'utf8')) || {};
+    loaded = JSON.parse(fs.readFileSync(ARTIST_COUNTRY_FILE, 'utf8')) || {};
   } catch (e) {
-    artistCountry = {};
+    loaded = {};
+  }
+  artistCountry = {};
+  let changed = false;
+  for (const [name, rec] of Object.entries(loaded)) {
+    // 丢弃旧版 Bing 结果；它们没有可验证的艺术家-国家对应关系。
+    if (
+      !rec ||
+      rec.resolverVersion !== COUNTRY_RESOLVER_VERSION ||
+      !CACHEABLE_COUNTRY_SOURCES.has(rec.source)
+    ) {
+      changed = true;
+      continue;
+    }
+    artistCountry[name] = rec;
+  }
+  if (changed) {
+    saveArtistCountries();
   }
 }
 
@@ -838,8 +1012,13 @@ async function mbLookup(name) {
     });
     if (!res.ok) return null;
     const j = await res.json();
-    const a = (j.artists || [])[0];
-    if (!a) return null;
+    const wanted = normalizeArtistName(name).toLocaleLowerCase();
+    const exact = (j.artists || []).filter((artist) =>
+      normalizeArtistName(artist && artist.name).toLocaleLowerCase() === wanted
+    );
+    // 模糊搜索的第一条结果可能是同名的另一位艺术家；不唯一时宁可未知。
+    if (exact.length !== 1) return null;
+    const a = exact[0];
     const iso =
       (a.area && a.area['iso_3166_1_codes'] && a.area['iso_3166_1_codes'][0]) ||
       (a.country && String(a.country).toUpperCase()) ||
@@ -852,59 +1031,23 @@ async function mbLookup(name) {
   }
 }
 
-async function bingLookup(name) {
-  const queries = [
-    '"' + name + '" musician country',
-    '"' + name + '" nationality',
-    '"' + name + '" 歌手 国籍',
-  ];
-  const votes = {};
-  for (const q of queries) {
-    await throttle(bingRef, 900);
-    try {
-      const res = await fetch('https://cn.bing.com/search?q=' + encodeURIComponent(q), {
-        headers: { 'User-Agent': UA, 'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8' },
-        signal: AbortSignal.timeout(10000),
-      });
-      const html = await res.text();
-      let text = html
-        .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-        .replace(/<[^>]+>/g, ' ')
-        .replace(/\s+/g, ' ');
-      // 关键：剔除艺术家名字本身，避免"Jasmine Jordan → 约旦"这类误判
-      text = text.split(name).join(' ');
-      const code = extractCountryFromText(text);
-      if (code) votes[code] = (votes[code] || 0) + 1;
-    } catch (e) { /* 单次查询失败跳过 */ }
-  }
-  let best = null, bestN = 0;
-  for (const [c, n] of Object.entries(votes)) {
-    if (n > bestN) { best = c; bestN = n; }
-  }
-  return bestN >= 2 ? best : null; // 至少两个查询一致才采信
-}
-
 // 解析单个艺术家国籍（去重 + 缓存 + 30 天有效期）
 function resolveArtistCountry(name) {
   const key = normalizeArtistName(name);
   if (!key) return Promise.resolve(null);
   const cached = cachedArtistCountry(key);
   if (isFreshCountryRecord(cached)) {
-    return Promise.resolve(cached.code ? cached : null);
+    return Promise.resolve(isTrustedCountryRecord(cached) && cached.code ? cached : null);
   }
   if (inflightCountry[key]) return inflightCountry[key];
   const p = (async () => {
     let code = await mbLookup(key);
     let source = 'mb';
-    if (!code) {
-      code = await bingLookup(key);
-      source = 'bing';
-    }
     const rec = {
       code: code || null,
       country: code ? (COUNTRY_NAMES[code] || code) : null,
       source: code ? source : 'none',
+      resolverVersion: COUNTRY_RESOLVER_VERSION,
       ts: Date.now(),
     };
     artistCountry[key] = rec;
@@ -1033,6 +1176,29 @@ function serveStatic(req, res, pathname) {
 }
 
 function handleApi(req, res, pathname, urlObj) {
+  if (pathname === '/api/audio/played') {
+    if (MODE !== 'jamendo') {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+    const id = (urlObj.searchParams.get('id') || '').trim();
+    if (!/^[A-Za-z0-9_-]+$/.test(id)) { json(res, 400, { error: 'invalid audio id' }); return; }
+    const removed = clearPlayedAudio(id);
+    topUpWarm();
+    json(res, 200, { ok: true, id, removed });
+    return;
+  }
+  if (pathname === '/api/client-session') {
+    if (!BROWSER_LIFECYCLE) { json(res, 404, { error: 'browser lifecycle disabled' }); return; }
+    const id = (urlObj.searchParams.get('id') || '').trim();
+    const state = (urlObj.searchParams.get('state') || 'heartbeat').toLowerCase();
+    if (!isValidBrowserSessionId(id)) { json(res, 400, { error: 'invalid session' }); return; }
+    updateBrowserSession(id, state === 'disconnect' ? 'disconnect' : 'heartbeat');
+    res.writeHead(204);
+    res.end();
+    return;
+  }
   if (pathname === '/api/song') {
     const respond = (s) => {
       const out = Object.assign({}, s);
@@ -1173,6 +1339,7 @@ const server = http.createServer((req, res) => {
             urlMap[s.id] = { url: s.streamUrl, type: 'audio/mpeg' };
           }
         }
+        if (sanitizeLoadedJamendoPool()) changed = true;
         saveUrlMap();
         if (changed) {
           try { fs.writeFileSync(POOL_FILE, JSON.stringify(arr)); } catch (e) { /* ignore */ }

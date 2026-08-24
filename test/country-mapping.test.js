@@ -1,0 +1,126 @@
+'use strict';
+
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawn } = require('node:child_process');
+const test = require('node:test');
+
+const projectRoot = path.resolve(__dirname, '..');
+
+function waitForServer(child, port) {
+  return new Promise((resolve, reject) => {
+    let output = '';
+    const onData = (chunk) => {
+      output += chunk.toString();
+      if (output.includes('World Vinyl running at http://127.0.0.1:' + port)) {
+        cleanup();
+        resolve();
+      }
+    };
+    const onExit = (code) => {
+      cleanup();
+      reject(new Error('server exited before startup (' + code + ')\n' + output));
+    };
+    const cleanup = () => {
+      child.stdout.off('data', onData);
+      child.stderr.off('data', onData);
+      child.off('exit', onExit);
+    };
+    child.stdout.on('data', onData);
+    child.stderr.on('data', onData);
+    child.on('exit', onExit);
+  });
+}
+
+test('does not report legacy pool countries as authoritative for Jamendo songs', async () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'world-vinyl-country-'));
+  const jamendoRoot = path.join(dataRoot, 'jamendo');
+  fs.mkdirSync(jamendoRoot, { recursive: true });
+  fs.writeFileSync(path.join(jamendoRoot, 'pool.json'), JSON.stringify([
+    {
+      id: '1307225',
+      title: "This Ain't Love",
+      artist: 'Jyant',
+      album: '',
+      streamUrl: 'https://example.test/jyant.mp3',
+      artwork: '',
+      duration: 180,
+      countrycode: 'CN',
+      country: '中国',
+    },
+    {
+      id: '1305161',
+      title: 'Give U My Name',
+      artist: 'Jyant',
+      album: '',
+      streamUrl: 'https://example.test/jyant-2.mp3',
+      artwork: '',
+      duration: 180,
+      countrycode: 'CN',
+      country: '中国',
+    },
+    {
+      id: '9999999',
+      title: 'Another Track',
+      artist: 'Another Artist',
+      album: '',
+      streamUrl: 'https://example.test/another.mp3',
+      artwork: '',
+      duration: 180,
+      countrycode: 'CN',
+      country: '中国',
+    },
+  ]));
+  fs.writeFileSync(path.join(dataRoot, 'artist-countries.json'), JSON.stringify({
+    Jyant: {
+      code: 'CN',
+      country: '中国',
+      source: 'none',
+      resolverVersion: 2,
+      ts: Date.now(),
+    },
+    'Another Artist': {
+      code: 'CN',
+      country: '中国',
+      source: 'none',
+      resolverVersion: 2,
+      ts: Date.now(),
+    },
+  }));
+
+  const port = 32000 + (process.pid % 1000);
+  const child = spawn(process.execPath, ['web/server.js'], {
+    cwd: projectRoot,
+    env: {
+      ...process.env,
+      WORLD_VINYL_DATA_DIR: dataRoot,
+      JAMENDO_CLIENT_ID: 'test-only',
+      WORLD_VINYL_PORT: String(port),
+      WORLD_VINYL_CLEAR_CACHE_ON_EXIT: '0',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let exited = false;
+  const exitPromise = new Promise((resolve) => {
+    child.once('exit', () => {
+      exited = true;
+      resolve();
+    });
+  });
+
+  try {
+    await waitForServer(child, port);
+    for (const id of ['1307225', '1305161', '9999999']) {
+      const response = await fetch('http://127.0.0.1:' + port + '/api/country?id=' + id);
+      const result = await response.json();
+      assert.equal(result.countrycode, '', JSON.stringify(result));
+      assert.equal(result.status, 'none', JSON.stringify(result));
+    }
+  } finally {
+    if (!exited) child.kill();
+    await exitPromise;
+    fs.rmSync(dataRoot, { recursive: true, force: true });
+  }
+});

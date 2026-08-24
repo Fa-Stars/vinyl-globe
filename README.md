@@ -53,9 +53,9 @@ npm run dist
 凭证和运行缓存保存在 Windows 用户数据目录下，不会打包进 exe，也不会写入安装目录。
 公开发布安装包时仍建议不要把个人凭证预先放进用户数据目录或环境变量中。
 
-> 首次访问时，后台会自动抓取各国家的歌曲（约 1~2 分钟跑完全部国家，
-> 期间页面立即可用：先随机到已就绪的国家）。歌曲按国家缓存到 `data/songs/`（或 `data/jamendo/`），
-> 每 12 小时自动刷新一次。重启秒级恢复（直接从磁盘缓存加载）。
+> 未配置 Jamendo key 时，后台会自动抓取各国家的 iTunes 歌曲（约 1~2 分钟跑完全部国家，
+> 期间页面立即可用：先随机到已就绪的国家）。Jamendo 模式则从全局歌曲池加载并随机选曲。
+> 运行缓存每 12 小时自动刷新，重启时会从磁盘快速恢复。
 
 ### 播放完整歌曲（推荐，Jamendo）
 
@@ -66,7 +66,8 @@ npm run dist
 3. 重启 `node web/server.js`，即自动切换为 **Jamendo 全曲模式**
 
 Jamendo 是正版免费（Creative Commons）音乐平台，返回**完整 mp3**，
-并按**艺术家国籍**过滤——正好驱动像素地球的国家高亮。未配置 key 时自动回退到 iTunes 试听模式。
+歌曲从全局热门池随机选择；服务器会尽力解析艺术家所属国家来驱动像素地球高亮，无法确认时保持未知。
+未配置 key 时自动回退到 iTunes 试听模式。
 
 ## 使用
 
@@ -100,11 +101,9 @@ Jamendo 是正版免费（Creative Commons）音乐平台，返回**完整 mp3**
   - **iTunes（试听兜底）**：`https://itunes.apple.com/{国家码}/rss/topsongs/limit=100/json`，
     按国家组织、30 秒试听，像素地球可高亮国家（代价是无全曲）。
 - **艺术家国籍解析**（Jamendo 模式让地球亮起来）：Jamendo API 本身不提供国家字段，
-  服务器通过**联网搜索**解析艺术家国籍——
-  ① **MusicBrainz**（结构化元数据库，取 `area`/`country` ISO 码，限速 1 请求/秒）；
-  ② 未命中时用 **Bing 搜索**（cn.bing.com，3 个查询模板多数投票，≥2 一致才采信，
-  并剔除艺术家名字本身避免「Jasmine Jordan→约旦」类误判）。
-  结果缓存到 `data/artist-countries.json`（30 天有效），实测命中率约 **70%**；
+  服务器只采信 **MusicBrainz** 的结构化元数据（取 `area`/`country` ISO 码，限速 1 请求/秒），
+  并要求艺术家名称唯一精确匹配；无法确认时返回「未知地区」，不使用搜索摘要猜测国家。
+  结果缓存到 `data/artist-countries.json`（30 天有效）；
   后台自动回填全部艺术家，播放中歌曲通过 `GET /api/country?id=` 即时解析并点亮地球。
 - **容错**：区分「永久无效」（HTTP 400 / Jamendo API 报错）与「瞬时失败」（网络/超时，自动重试一次、
   不误标记）；榜单只有一首歌时 Apple 返回单个对象而非数组，已做归一化处理。
@@ -124,13 +123,17 @@ Jamendo 是正版免费（Creative Commons）音乐平台，返回**完整 mp3**
 | --- | --- |
 | `GET /api/song` | 随机返回一首歌 `{title, artist, album, streamUrl, artwork, duration, countrycode, country}` |
 | `GET /api/song?country=JP` | 指定国家返回一首歌（仅 iTunes 模式可用） |
-| `GET /api/country?id=…` | 解析/返回某首歌艺术家的国籍（MusicBrainz + Bing，结果缓存 30 天） |
+| `GET /api/country?id=…` | 解析/返回某首歌艺术家的国籍（MusicBrainz，结果缓存 30 天） |
 | `GET /api/info` | 模式与缓存统计（`mode: jamendo/itunes`、歌曲数） |
 | `GET /api/countries` | 已缓存国家列表（仅 iTunes 模式有数据） |
 
 ## 缓存生命周期
 
-程序正常退出时会清理歌曲、音频、Jamendo/iTunes 歌曲池、艺术家国家信息和地球图片等运行时缓存；`data/config.json` 会保留，因此已输入的 Jamendo `client_id` 不会丢失。Electron 关闭窗口和直接运行 `web/start.bat` 后按 Ctrl+C 都支持该清理逻辑。
+程序退出时会清理歌曲、音频、Jamendo/iTunes 歌曲池、艺术家国家信息和地球图片等运行时缓存；`data/config.json` 会保留，因此已输入的 Jamendo `client_id` 不会丢失。Electron 关闭窗口和直接运行 `web/start.bat` 后按 Ctrl+C、Ctrl+Break 或直接关闭控制台窗口，都支持该清理逻辑。
+
+Jamendo 模式下，歌曲播放结束后也会立即删除该歌曲的本地音频文件和下载临时文件；歌曲池及远程 URL 元数据会保留，以便后续需要时重新下载。
+
+> 通过 `web/start.bat` 启动时，关闭最后一个浏览器页面会通知 Node 服务退出并清理缓存；关闭启动脚本的控制台窗口、按 Ctrl+C 或 Ctrl+Break 也会触发清理。浏览器崩溃或任务管理器强制结束属于不可捕获的终止方式，无法保证立即执行清理（心跳失联时最多等待约 45 秒）。
 
 ## 目录结构
 
@@ -199,7 +202,7 @@ git push origin main
 ## 已知限制
 
 - **试听 vs 全曲**：不配置 Jamendo key 时只能播 iTunes 的约 30 秒试听；配置 key 后才可使用 Jamendo 全曲模式。
-- **国家解析**：艺术家国籍通过 MusicBrainz / Bing 联网解析，查不到的艺术家显示「未知地区」且地球不高亮；
+- **国家解析**：艺术家国籍通过 MusicBrainz 结构化数据解析，查不到或名称有歧义的艺术家显示「未知地区」且地球不高亮；
   结果会缓存到本地。
 - **封面加载**：远程封面依赖网络；高清封面不可用时会自动使用原始 URL 或默认样式回退。
 - 若部署到 HTTPS 环境，个别 `http://` 音频链接会被浏览器拦截；本地 `http://localhost` 无此问题。

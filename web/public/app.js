@@ -53,6 +53,46 @@ let targetRot = null;     // 要转到的国家经度（null = 空闲自转）
 const DISPLAY_CODE_ALIASES = { TW: 'CN' };
 const DISPLAY_NAMES = { CN: '中国' };
 
+// Web 版用页面会话通知后端：最后一个页面关闭后，后端才能安全退出并清理缓存。
+// Electron 页面不注册会话，由 Electron 主进程统一处理窗口关闭。
+function createBrowserSessionId() {
+  try {
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+      return window.crypto.randomUUID();
+    }
+  } catch (e) { /* 使用降级 ID */ }
+  return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+}
+
+const browserSessionId = window.electronAPI ? '' : createBrowserSessionId();
+let browserHeartbeat = null;
+
+function browserSessionUrl(state) {
+  return '/api/client-session?id=' + encodeURIComponent(browserSessionId) + '&state=' + state;
+}
+
+function sendBrowserSession(state, beacon) {
+  if (!browserSessionId) return;
+  const url = browserSessionUrl(state);
+  if (beacon && navigator.sendBeacon) {
+    navigator.sendBeacon(url);
+    return;
+  }
+  fetch(url, { method: 'POST', keepalive: true, cache: 'no-store' }).catch(() => {});
+}
+
+function startBrowserSession() {
+  if (!browserSessionId) return;
+  sendBrowserSession('connect', false);
+  browserHeartbeat = setInterval(() => sendBrowserSession('heartbeat', false), 15000);
+  window.addEventListener('pagehide', (event) => {
+    // bfcache 恢复时页面仍然活着，不能误报为窗口关闭。
+    if (event.persisted) return;
+    clearInterval(browserHeartbeat);
+    sendBrowserSession('disconnect', true);
+  }, { once: true });
+}
+
 /* ---------------- 工具 ---------------- */
 function codeToFlag(code) {
   if (!/^[A-Z]{2}$/.test(code)) return '🌐';
@@ -202,6 +242,13 @@ audio.addEventListener('timeupdate', () => {
 });
 audio.addEventListener('ended', () => {
   if (!started || !current) return;
+  const playedId = current.id;
+  if (playedId) {
+    const url = '/api/audio/played?id=' + encodeURIComponent(String(playedId));
+    if (!navigator.sendBeacon || !navigator.sendBeacon(url)) {
+      fetch(url, { method: 'POST', keepalive: true, cache: 'no-store' }).catch(() => {});
+    }
+  }
   setPlayingUI(false);
   setStatus('歌曲结束，自动播放下一首…');
   clearTimeout(autoTimer);
@@ -284,28 +331,44 @@ function prefetch() {
 
 // 歌曲开始后，异步解析艺术家国籍并点亮地球仪（未解析到时轮询）
 let countryPollTimer = null;
-function pollCountry(id) {
+let countryPollGeneration = 0;
+
+function invalidateCountryPoll() {
+  countryPollGeneration++;
   clearTimeout(countryPollTimer);
+  countryPollTimer = null;
+}
+
+function pollCountry(id) {
+  invalidateCountryPoll();
+  const generation = countryPollGeneration;
+  const songId = String(id);
+  const isActive = () =>
+    generation === countryPollGeneration && current && String(current.id) === songId;
   (async () => {
     for (let i = 0; i < 10; i++) {
+      if (!isActive()) return;
       try {
         const r = await fetch('/api/country?id=' + encodeURIComponent(id));
         if (!r.ok) break;
         const j = await r.json();
-        if (j.countrycode) { applyCountry(j); return; }
+        if (!isActive()) return;
+        if (j.id != null && String(j.id) !== songId) return;
+        if (j.countrycode) { applyCountry(j, songId); return; }
         if (j.status === 'none' || j.status === 'error') return;
       } catch (e) { /* 网络错误：稍后重试 */ }
+      if (!isActive()) return;
       await new Promise((r) => setTimeout(r, 2500));
     }
   })();
 }
 
-function applyCountry(j) {
+function applyCountry(j, expectedId) {
+  const resultId = j.id != null ? String(j.id) : String(expectedId || '');
+  if (!current || !resultId || String(current.id) !== resultId) return;
   setCountry(j.countrycode, j.country);
-  if (current) {
-    current.countrycode = j.countrycode || '';
-    current.country = j.country || '未知地区';
-  }
+  current.countrycode = j.countrycode || '';
+  current.country = j.country || '未知地区';
 }
 
 // 统一设置"当前国家"：更新高亮、让地球仪转过去并缩放、刷新显示
@@ -350,6 +413,7 @@ function setCountry(code, displayName) {
 }
 
 function setSong(s) {
+  invalidateCountryPoll();
   current = s;
   setCountry(s.countrycode, s.country);
 
@@ -357,7 +421,7 @@ function setSong(s) {
   npMeta.textContent = [s.artist, s.album, fmtDuration(s.duration)].filter(Boolean).join(' · ');
   npProgressFill.style.width = '0%';
 
-  // 未带国家信息 → 后台解析（MusicBrainz/Bing），完成后地球仪亮起并转过去
+  // 未带国家信息 → 后台解析（MusicBrainz），完成后地球仪亮起并转过去
   if (!s.countrycode && s.id) pollCountry(s.id);
 
   // 整张唱片与中心标签共用专辑海报；无封面时使用主题渐变
@@ -776,6 +840,7 @@ window.addEventListener('keydown', (event) => {
 
 /* ---------------- 启动 ---------------- */
 (async function init() {
+  startBrowserSession();
   try {
     const r = await fetch('map.json');
     if (r.ok) map = await r.json();
