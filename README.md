@@ -129,7 +129,7 @@ Jamendo 是正版免费（Creative Commons）音乐平台，返回**完整 mp3**
 
 ## 缓存生命周期
 
-程序退出时会清理歌曲、音频、Jamendo/iTunes 歌曲池、艺术家国家信息和地球图片等运行时缓存；`data/config.json` 会保留，因此已输入的 Jamendo `client_id` 不会丢失。Electron 关闭窗口和直接运行 `web/start.bat` 后按 Ctrl+C、Ctrl+Break 或直接关闭控制台窗口，都支持该清理逻辑。
+程序退出时会清理歌曲、音频、Jamendo/iTunes 歌曲池、艺术家国家信息和地球图片等运行时缓存；Electron 在关闭窗口和最终退出阶段都会执行一次幂等清理；`data/config.json` 会保留，因此已输入的 Jamendo `client_id` 不会丢失。直接运行 `web/start.bat` 后按 Ctrl+C、Ctrl+Break 或直接关闭控制台窗口，也支持该清理逻辑。
 
 Jamendo 模式下，歌曲播放结束后也会立即删除该歌曲的本地音频文件和下载临时文件；歌曲池及远程 URL 元数据会保留，以便后续需要时重新下载。
 

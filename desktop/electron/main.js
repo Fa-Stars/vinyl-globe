@@ -12,6 +12,7 @@ let mainWindow = null;
 let backend = null;
 let backendPort = null;
 let quitting = false;
+let runtimeCacheCleared = false;
 
 function appRoot() {
   // web/server.js 和 web/public/ 会在生产构建中放到 asarUnpack，便于子进程直接读取。
@@ -26,6 +27,25 @@ function publicRoot() {
 
 function dataRoot() {
   return path.join(app.getPath('userData'), 'data');
+}
+
+function clearDesktopRuntimeCache() {
+  if (runtimeCacheCleared) return 0;
+
+  let removed = 0;
+  try {
+    removed = clearRuntimeCache(dataRoot(), (error) => {
+      console.warn('[main] cache cleanup failed:', error.message);
+    });
+  } catch (error) {
+    console.warn('[main] cache cleanup failed:', error.message);
+  } finally {
+    // 清理函数是幂等的；避免 before-quit 和 will-quit 重复触碰文件。
+    runtimeCacheCleared = true;
+  }
+
+  console.log('[main] runtime cache cleared; config.json preserved (' + removed + ' entries)');
+  return removed;
 }
 
 function configPath() {
@@ -245,14 +265,18 @@ app.on('before-quit', (event) => {
   if (backend) {
     event.preventDefault();
     stopBackend().finally(() => {
-      clearRuntimeCache(dataRoot(), (error) => console.warn('[main] cache cleanup failed:', error.message));
-      console.log('[main] runtime cache cleared; config.json preserved');
+      clearDesktopRuntimeCache();
       app.quit();
     });
   } else {
-    clearRuntimeCache(dataRoot(), (error) => console.warn('[main] cache cleanup failed:', error.message));
-    console.log('[main] runtime cache cleared; config.json preserved');
+    clearDesktopRuntimeCache();
   }
+});
+
+// before-quit 会先等待后端退出；will-quit 作为最后一道同步兜底，覆盖
+// 没有后端进程、窗口关闭和其他正常退出路径。
+app.on('will-quit', () => {
+  clearDesktopRuntimeCache();
 });
 
 app.on('window-all-closed', () => {

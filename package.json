@@ -1,6 +1,6 @@
 {
   "name": "world-vinyl",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "世界唱片机 · World Vinyl desktop player",
   "author": "World Vinyl",
   "main": "desktop/electron/main.js",
@@ -46,10 +46,14 @@
       ]
     },
     "nsis": {
+      "artifactName": "World-Vinyl-${version}-${arch}-Setup.${ext}",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
+    },
+    "portable": {
+      "artifactName": "World-Vinyl-${version}-${arch}-Portable.${ext}"
     }
   }
 }
