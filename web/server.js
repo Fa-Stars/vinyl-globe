@@ -18,6 +18,11 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { clearRuntimeCache } = require('../runtime-cache');
+const {
+  extractMusicBrainzCountryCode,
+  selectMusicBrainzArtist,
+  selectMusicBrainzCountryCode,
+} = require('./country-resolver');
 
 const ROOT = __dirname;
 const PROJECT_ROOT = path.resolve(ROOT, '..');
@@ -33,7 +38,8 @@ const REFRESH_MS = 12 * 3600 * 1000;    // 每 12 小时整体刷新一次缓存
 // 搜索引擎摘要容易把无关网页中的国家名误当成艺术家国籍。
 const TRUSTED_COUNTRY_SOURCE = 'mb';
 const CACHEABLE_COUNTRY_SOURCES = new Set([TRUSTED_COUNTRY_SOURCE, 'none']);
-const COUNTRY_RESOLVER_VERSION = 2;
+// Bump when the resolver logic changes so stale negative results are retried.
+const COUNTRY_RESOLVER_VERSION = 8;
 
 // ---- 配置：Jamendo client_id（环境变量优先，其次 data/config.json）----
 function loadConfig() {
@@ -57,6 +63,7 @@ const WARM_READY_WAIT_MS = 5000; // 缓存刚启动时，最多等一首就绪�
 const COUNTRY_CACHE_TTL = 30 * 86400 * 1000;
 const COUNTRY_NONE_TTL = 7 * 86400 * 1000;
 const COUNTRY_PREFETCH_TARGET = 16; // 与音频预缓存同一批，提前准备国家/地区
+const COUNTRY_LOOKUP_WAIT_MS = 1400; // 当前歌曲优先解析，最多不阻塞换歌多久
 
 let shuttingDown = false;
 let cacheCleared = false;
@@ -814,10 +821,17 @@ const countryQueued = new Set();
 let countryPumping = false;
 const inflightCountry = {}; // artistName -> Promise（去重）
 const mbRef = { v: 0 };
+const mbAreaCountryCache = new Map(); // area id -> {code, definitive}
 let poolSaveTimer = null;
 
 function normalizeArtistName(name) {
-  return String(name || '').trim().replace(/\s+/g, ' ');
+  const decoded = String(name || '')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>');
+  return decoded.trim().replace(/\s+/g, ' ');
 }
 
 function cachedArtistCountry(name) {
@@ -1001,34 +1015,106 @@ async function throttle(ref, minGap) {
   if (wait) await sleep(wait);
 }
 
-async function mbLookup(name) {
-  await throttle(mbRef, 1100); // MusicBrainz 限速 1 req/s
-  try {
-    const url = 'https://musicbrainz.org/ws/2/artist/?query=artist:%22' +
-      encodeURIComponent(name) + '%22&fmt=json';
-    const res = await fetch(url, {
-      headers: { 'User-Agent': UA },
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!res.ok) return null;
-    const j = await res.json();
-    const wanted = normalizeArtistName(name).toLocaleLowerCase();
-    const exact = (j.artists || []).filter((artist) =>
-      normalizeArtistName(artist && artist.name).toLocaleLowerCase() === wanted
-    );
-    // 模糊搜索的第一条结果可能是同名的另一位艺术家；不唯一时宁可未知。
-    if (exact.length !== 1) return null;
-    const a = exact[0];
-    const iso =
-      (a.area && a.area['iso_3166_1_codes'] && a.area['iso_3166_1_codes'][0]) ||
-      (a.country && String(a.country).toUpperCase()) ||
-      (a['begin-area'] && a['begin-area']['iso_3166_1_codes'] && a['begin-area']['iso_3166_1_codes'][0]) ||
-      '';
-    // 只接受标准 ISO 码（在中文国家名表里查得到），过滤 MusicBrainz 的非标码（如 XW）
-    return /^[A-Z]{2}$/.test(iso) && COUNTRY_NAMES[iso] ? iso : null;
-  } catch (e) {
-    return null;
+async function musicBrainzJson(url) {
+  // MusicBrainz 偶尔会返回 503；临时故障不能被写成“无国家”，否则会被
+  // 负缓存挡住数天。只对可重试的响应和网络错误做少量退避重试。
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await throttle(mbRef, 1100); // MusicBrainz 限速 1 req/s
+    try {
+      const res = await fetch(url, {
+        headers: { 'User-Agent': UA },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (res.ok) return { json: await res.json(), definitive: true };
+      if (![408, 425, 429, 500, 502, 503, 504].includes(res.status)) {
+        return { json: null, definitive: true };
+      }
+    } catch (e) {
+      // 网络抖动、TLS 临时失败或超时：不要把它当成艺术家没有国家。
+    }
   }
+  return { json: null, definitive: false };
+}
+
+async function mbAreaTreeLookup(areaId, seen, depth) {
+  if (!areaId || seen.has(areaId) || depth > 4) {
+    return { code: null, definitive: true };
+  }
+  const cached = mbAreaCountryCache.get(areaId);
+  if (cached) return cached;
+  seen.add(areaId);
+  const url = 'https://musicbrainz.org/ws/2/area/' +
+    encodeURIComponent(areaId) + '?inc=area-rels&fmt=json';
+  const result = await musicBrainzJson(url);
+  if (!result.definitive) return { code: null, definitive: false };
+
+  const parentAreas = (result.json && result.json.relations || [])
+    .filter((relation) =>
+      relation && relation.type === 'part of' &&
+      relation.direction === 'backward' && relation.area
+    )
+    .map((relation) => relation.area);
+  const directCodes = parentAreas
+    .map((area) => extractMusicBrainzCountryCode({ area }, COUNTRY_NAMES))
+    .filter(Boolean);
+  const directUnique = [...new Set(directCodes)];
+  if (directUnique.length === 1) {
+    const resolved = { code: directUnique[0], definitive: true };
+    mbAreaCountryCache.set(areaId, resolved);
+    return resolved;
+  }
+  if (directUnique.length > 1) {
+    const ambiguous = { code: null, definitive: true };
+    mbAreaCountryCache.set(areaId, ambiguous);
+    return ambiguous;
+  }
+
+  let transientFailure = false;
+  const parentCodes = [];
+  for (const parent of parentAreas) {
+    if (!parent.id) continue;
+    const nested = await mbAreaTreeLookup(parent.id, seen, depth + 1);
+    if (!nested.definitive) transientFailure = true;
+    if (nested.code) parentCodes.push(nested.code);
+  }
+  const unique = [...new Set(parentCodes)];
+  const resolved = {
+    code: unique.length === 1 ? unique[0] : null,
+    definitive: !transientFailure,
+  };
+  if (resolved.definitive) mbAreaCountryCache.set(areaId, resolved);
+  return resolved;
+}
+
+async function mbAreaLookup(artist) {
+  // begin-area 更接近艺术家的出生/来源地；如果没有结果，再看当前 area。
+  const areas = [artist && artist['begin-area'], artist && artist.area]
+    .filter((area) => area && area.id);
+  let transientFailure = false;
+  for (const area of areas) {
+    const result = await mbAreaTreeLookup(area.id, new Set(), 0);
+    if (!result.definitive) transientFailure = true;
+    if (result.code) return { code: result.code, definitive: true };
+  }
+  // 多个国家关系不确定时仍保持未知；资料源临时不可用时则下次重试。
+  return { code: null, definitive: !transientFailure };
+}
+
+async function mbLookup(name) {
+  const url = 'https://musicbrainz.org/ws/2/artist/?query=artist:%22' +
+    encodeURIComponent(name) + '%22&inc=area-rels&fmt=json&limit=8';
+  const result = await musicBrainzJson(url);
+  if (!result.definitive) return { code: null, definitive: false };
+  const artists = result.json && result.json.artists || [];
+  const iso = selectMusicBrainzCountryCode(artists, name, COUNTRY_NAMES);
+  // 只接受标准 ISO 码（在中文国家名表里查得到），过滤 MusicBrainz 的非标码（如 XW）
+  if (iso) return { code: iso, definitive: true };
+
+  // 艺术家只有城市/地区而没有国家码时，沿 MusicBrainz 的 area 关系查父级国家。
+  // 仅对唯一精确匹配执行，避免把同名艺术家的出生地混到一起。
+  const artist = selectMusicBrainzArtist(artists, name);
+  if (!artist) return { code: null, definitive: true };
+  return mbAreaLookup(artist);
 }
 
 // 解析单个艺术家国籍（去重 + 缓存 + 30 天有效期）
@@ -1041,7 +1127,10 @@ function resolveArtistCountry(name) {
   }
   if (inflightCountry[key]) return inflightCountry[key];
   const p = (async () => {
-    let code = await mbLookup(key);
+    const lookup = await mbLookup(key);
+    // 暂时无法访问资料源：不落盘、不清除旧的可信标注，让后续轮询或下次播放重试。
+    if (!lookup.definitive) return null;
+    const code = lookup.code;
     let source = 'mb';
     const rec = {
       code: code || null,
@@ -1200,7 +1289,7 @@ function handleApi(req, res, pathname, urlObj) {
     return;
   }
   if (pathname === '/api/song') {
-    const respond = (s) => {
+    const respond = async (s) => {
       const out = Object.assign({}, s);
       // Jamendo 模式：走本地 /audio 代理（已缓存则秒开，未缓存则转发并后台预下载）
       if (MODE === 'jamendo' && s.id) {
@@ -1208,14 +1297,27 @@ function handleApi(req, res, pathname, urlObj) {
         consumeWarm(s.id); // 这首歌被取走，从就绪列表移除
         topUpWarm();       // 立刻补一首新的进预下载流水线
       }
-      // 国家信息：预取完成的直接带上；未解析的只入优先队列，避免播放时临时联网。
+      // 国家信息：当前歌曲拥有最高优先级。解析与音频预缓存并行进行，
+      // 只给当前 API 请求留一小段时间拿到结果，超时则让前端继续轮询。
       if (MODE === 'jamendo' && s.artist) {
-        const rec = countryRecordForSong(s);
+        let rec = countryRecordForSong(s);
+        if (!rec) {
+          rec = await Promise.race([
+            resolveArtistCountry(s.artist),
+            sleep(COUNTRY_LOOKUP_WAIT_MS).then(() => null),
+          ]);
+        }
         if (rec) {
           out.countrycode = rec.code;
           out.country = rec.country || COUNTRY_NAMES[rec.code] || out.country;
+          out.countryStatus = 'resolved';
         } else {
+          // resolveArtistCountry 可能仍在飞行中；队列会自动去重，不会重复请求。
           queueCountryArtist(s.artist, true);
+          const latest = cachedArtistCountry(s.artist);
+          const definitiveNone =
+            isFreshCountryRecord(latest) && latest.source === 'none';
+          out.countryStatus = definitiveNone ? 'none' : 'resolving';
         }
       }
       json(res, 200, out);
@@ -1229,13 +1331,13 @@ function handleApi(req, res, pathname, urlObj) {
         const s = songs[randomIndex(songs.length)];
         state.lastKey = s.countrycode + '|' + s.title;
         state.lastCountry = cc;
-        respond(s);
+        respond(s).catch(() => json(res, 500, { error: 'fetch failed' }));
       }).catch(() => json(res, 500, { error: 'fetch failed' }));
       return;
     }
     pickSong().then((s) => {
       if (!s) { json(res, 503, { error: '歌曲库尚未就绪，请稍后重试' }); return; }
-      respond(s);
+      respond(s).catch(() => json(res, 500, { error: 'fetch failed' }));
     }).catch(() => json(res, 500, { error: 'fetch failed' }));
     return;
   }
@@ -1247,12 +1349,14 @@ function handleApi(req, res, pathname, urlObj) {
     const cached = countryRecordForSong(song);
     const result = cached ? Promise.resolve(cached) : resolveArtistCountry(song.artist);
     result.then((rec) => {
+      const latest = cachedArtistCountry(song.artist);
+      const definitiveNone = isFreshCountryRecord(latest) && latest.source === 'none';
       json(res, 200, {
         id: song.id,
         artist: song.artist,
         countrycode: rec && rec.code ? rec.code : '',
         country: rec && rec.country ? rec.country : '',
-        status: rec && rec.code ? 'resolved' : 'none',
+        status: rec && rec.code ? 'resolved' : definitiveNone ? 'none' : 'resolving',
       });
     }).catch(() => json(res, 200, { id: song.id, countrycode: '', country: '', status: 'error' }));
     return;

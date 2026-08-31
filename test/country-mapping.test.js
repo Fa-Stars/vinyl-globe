@@ -6,8 +6,62 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const test = require('node:test');
+const {
+  extractMusicBrainzCountryCode,
+  selectMusicBrainzCountryCode,
+} = require('../web/country-resolver');
 
 const projectRoot = path.resolve(__dirname, '..');
+
+test('reads MusicBrainz hyphenated ISO country codes', () => {
+  const artist = {
+    name: 'pornophonique',
+    area: {
+      name: 'Germany',
+      'iso-3166-1-codes': ['DE'],
+    },
+  };
+  assert.equal(extractMusicBrainzCountryCode(artist, { DE: '德国' }), 'DE');
+});
+
+test('reads a country from the MusicBrainz begin-area fallback', () => {
+  const artist = {
+    name: 'Borrtex',
+    area: { name: 'Los Angeles' },
+    'begin-area': {
+      name: 'Praha',
+      'iso-3166-1-codes': ['CZ'],
+    },
+  };
+  assert.equal(extractMusicBrainzCountryCode(artist, { CZ: '捷克' }), 'CZ');
+});
+
+test('maps a MusicBrainz country area name when an ISO code is absent', () => {
+  const artist = {
+    name: 'Example Artist',
+    area: { name: 'Germany' },
+  };
+  assert.equal(extractMusicBrainzCountryCode(artist, { DE: '德国' }), 'DE');
+});
+
+test('keeps the only trustworthy country among duplicate exact artist matches', () => {
+  const artists = [
+    { name: 'Example Artist', area: { name: '[Worldwide]' } },
+    { name: 'Example Artist', area: { 'iso-3166-1-codes': ['JP'] } },
+  ];
+  assert.equal(selectMusicBrainzCountryCode(artists, 'Example Artist', { JP: '日本' }), 'JP');
+});
+
+test('rejects duplicate exact artist matches that disagree on country', () => {
+  const artists = [
+    { name: 'Example Artist', area: { 'iso-3166-1-codes': ['JP'] } },
+    { name: 'Example Artist', area: { 'iso-3166-1-codes': ['US'] } },
+  ];
+  assert.equal(
+    selectMusicBrainzCountryCode(artists, 'Example Artist', { JP: '日本', US: '美国' }),
+    null,
+  );
+});
 
 function waitForServer(child, port) {
   return new Promise((resolve, reject) => {

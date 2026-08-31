@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1a2f3d"/>
+      <stop offset="1" stop-color="#071018"/>
+    </linearGradient>
+    <radialGradient id="disc" cx="34%" cy="28%" r="78%">
+      <stop offset="0" stop-color="#5c6b9a"/>
+      <stop offset=".55" stop-color="#292c55"/>
+      <stop offset="1" stop-color="#0e111d"/>
+    </radialGradient>
+    <clipPath id="globeClip"><circle cx="512" cy="512" r="300"/></clipPath>
+  </defs>
+  <rect width="1024" height="1024" rx="224" fill="url(#bg)"/>
+  <circle cx="512" cy="512" r="368" fill="#080b13" stroke="#d9a441" stroke-width="12"/>
+  <circle cx="512" cy="512" r="334" fill="url(#disc)" stroke="#303449" stroke-width="8"/>
+  <g fill="none" stroke="#9ca4d6" stroke-opacity=".24" stroke-width="7">
+    <circle cx="512" cy="512" r="70"/>
+    <circle cx="512" cy="512" r="104"/>
+    <circle cx="512" cy="512" r="138"/>
+    <circle cx="512" cy="512" r="172"/>
+    <circle cx="512" cy="512" r="206"/>
+    <circle cx="512" cy="512" r="240"/>
+    <circle cx="512" cy="512" r="274"/>
+    <circle cx="512" cy="512" r="308"/>
+  </g>
+  <g clip-path="url(#globeClip)" fill="none" stroke="#76d7c2" stroke-opacity=".82" stroke-width="12">
+    <ellipse cx="512" cy="512" rx="300" ry="105"/>
+    <ellipse cx="512" cy="512" rx="155" ry="300"/>
+    <path d="M212 512h600M256 360h512M256 664h512"/>
+  </g>
+  <path d="M392 453c55-40 104-18 131-53 29-37 56-25 84 3 22 22 58 17 76 56 14 31-23 50-33 79-12 32-3 72-39 78-43 7-71-28-110-19-37 8-49 48-84 37-36-12-35-59-57-83-21-23-55-38-47-70 6-22 46-18 79-28Z" fill="#79c98f" fill-opacity=".88" stroke="#b6e2aa" stroke-width="7"/>
+  <circle cx="512" cy="512" r="54" fill="#f6c76c" stroke="#fff0ae" stroke-width="8"/>
+  <circle cx="512" cy="512" r="16" fill="#202233"/>
+  <circle cx="512" cy="512" r="392" fill="none" stroke="#76d7c2" stroke-opacity=".25" stroke-width="8"/>
+</svg>

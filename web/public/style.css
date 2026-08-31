@@ -11,6 +11,8 @@
   --led: #ff4d4d;
   --land: #23402e;
   --sea: #101e30;
+  --line: rgba(255, 255, 255, .1);
+  --teal: #76d7c2;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -26,25 +28,45 @@ body {
   min-height: 100vh;
   display: flex;
   justify-content: center;
-  padding: 24px 16px;
+  padding: clamp(14px, 2.5vw, 26px) 16px;
 }
 
-.stage { width: 100%; max-width: 1080px; display: flex; flex-direction: column; gap: 18px; }
+.stage { width: 100%; max-width: 1120px; display: flex; flex-direction: column; gap: 14px; }
 
 /* ---------------- header ---------------- */
-.topbar { text-align: center; }
+.topbar { padding: 0 4px; }
+.brand-row, .topbar-subrow { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.brand-lockup { display: flex; align-items: center; gap: 11px; }
+.brand-orb {
+  display: grid; place-items: center;
+  width: 42px; height: 42px; border-radius: 50%;
+  background: radial-gradient(circle at 34% 25%, #2d6276, #102331 70%);
+  border: 1px solid rgba(118, 215, 194, .45);
+  box-shadow: 0 0 24px rgba(72, 180, 175, .2), inset 0 1px 0 rgba(255, 255, 255, .2);
+  font-size: 22px;
+}
 .title {
-  font-size: 30px; letter-spacing: 2px;
+  font-size: clamp(25px, 3vw, 32px); letter-spacing: 2px;
   text-shadow: 0 0 24px rgba(217, 164, 65, .35);
 }
 .title-en {
-  font-family: Georgia, serif; font-size: 13px; letter-spacing: 6px;
-  color: var(--gold); display: block; margin-top: 4px;
+  font-family: Georgia, serif; font-size: 11px; letter-spacing: 5px;
+  color: var(--gold); margin-top: 3px;
 }
-.subtitle { margin-top: 8px; color: var(--muted); font-size: 14px; }
+.header-status {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 7px 10px; border: 1px solid rgba(118, 215, 194, .22);
+  border-radius: 999px; color: #9ab9b6;
+  font: 700 9px/1 "SFMono-Regular", Consolas, monospace; letter-spacing: 1.2px;
+  background: rgba(14, 30, 38, .62);
+}
+.header-status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--teal); box-shadow: 0 0 9px var(--teal); }
+.topbar-subrow { margin-top: 10px; padding-left: 53px; }
+.subtitle { color: var(--muted); font-size: 13px; }
+.topbar-actions { display: flex; align-items: center; gap: 12px; }
+.edition-note { color: #647184; font: 700 9px/1 "SFMono-Regular", Consolas, monospace; letter-spacing: 1.2px; }
 
 .settings-button {
-  margin-top: 12px;
   padding: 7px 13px;
   border: 1px solid rgba(217, 164, 65, .42);
   border-radius: 999px;
@@ -56,6 +78,11 @@ body {
   transition: background .2s, border-color .2s, transform .2s;
 }
 .settings-button:hover { background: rgba(217, 164, 65, .16); border-color: var(--gold); transform: translateY(-1px); }
+
+button:focus-visible, input:focus-visible, a:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 3px;
+}
 
 .settings-modal {
   position: fixed;
@@ -134,39 +161,53 @@ kbd {
 .layout {
   display: grid;
   grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
-  gap: 20px;
+  gap: 16px;
   align-items: start;
 }
 
 /* ================= 唱片机 ================= */
 .deck {
-  background: linear-gradient(150deg, var(--wood1), var(--wood2) 60%);
+  background:
+    linear-gradient(115deg, rgba(255, 214, 148, .08), transparent 26%),
+    linear-gradient(150deg, var(--wood1), var(--wood2) 60%);
   border-radius: 22px;
-  padding: 26px 24px 20px;
+  padding: 18px 18px 15px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 11px;
   box-shadow: 0 18px 50px rgba(0, 0, 0, .55), inset 0 1px 0 rgba(255, 255, 255, .12);
   border: 1px solid rgba(255, 255, 255, .06);
 }
+.deck-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 0 3px; }
+.deck-heading { display: flex; flex-direction: column; gap: 3px; }
+.deck-eyebrow { color: rgba(255, 228, 179, .62); font: 700 9px/1 "SFMono-Regular", Consolas, monospace; letter-spacing: 1.7px; }
+.deck-heading strong { color: #f8e9ca; font: 700 15px/1.1 Georgia, serif; letter-spacing: 1.1px; }
+.deck-badge {
+  padding: 5px 8px; border: 1px solid rgba(217, 164, 65, .32); border-radius: 3px;
+  color: #e5bd6a; background: rgba(29, 21, 12, .45);
+  font: 700 8px/1 "SFMono-Regular", Consolas, monospace; letter-spacing: 1px;
+}
+.deck-badge[data-state="live"] { color: #ffb18b; border-color: rgba(255, 108, 92, .45); }
+.deck-badge[data-state="loading"] { color: #b9c3d5; border-color: rgba(185, 195, 213, .25); }
 .deck-main {
   display: flex;
   gap: 22px;
   align-items: center;
   justify-content: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 .deck-bar {
   display: flex;
-  gap: 26px;
+  gap: 16px;
   align-items: center;
-  justify-content: center;
-  padding-top: 8px;
+  justify-content: space-between;
+  padding: 9px 3px 0;
+  border-top: 1px solid rgba(255, 226, 184, .13);
 }
 
 .turntable {
   position: relative;
-  width: min(430px, 76vw);
+  width: min(360px, 42vw);
   aspect-ratio: 1 / 1;
   flex-shrink: 0;
 }
@@ -289,7 +330,7 @@ kbd {
   position: absolute; left: 64%; top: 0;
   width: 36%; height: 100%;
   transform-origin: 100% 0%;
-  transform: rotate(-35deg);          /* 抬起待机，停在转盘右侧 */
+  transform: rotate(35deg);           /* 抬起待机，停在转盘右侧 */
   transition: transform .55s cubic-bezier(.5, .1, .3, 1.2);
   z-index: 6;
   pointer-events: none;
@@ -322,7 +363,7 @@ kbd {
   box-shadow: 0 2px 6px rgba(0, 0, 0, .7);
 }
 
-.deck.playing .tonearm { transform: rotate(-6deg); }    /* 落下播放 */
+.deck.playing .tonearm { transform: rotate(6deg); }     /* 落下播放 */
 
 /* 指示灯 */
 .led-wrap {
@@ -356,30 +397,38 @@ kbd {
 }
 .btn:hover { transform: scale(1.08); box-shadow: 0 0 14px rgba(217, 164, 65, .35); }
 .btn:active { transform: scale(.95); }
+.btn-primary { background: radial-gradient(circle at 35% 30%, #66502a, #171310 70%); box-shadow: 0 0 0 4px rgba(217, 164, 65, .08); }
+.btn:disabled { cursor: wait; opacity: .55; }
 
 /* 正在播放信息 */
 .now-playing {
-  min-width: 240px; flex: 1 1 220px;
+  min-width: 0; flex: 1 1 170px;
   background: rgba(10, 12, 18, .55);
   border: 1px solid rgba(255, 255, 255, .07);
   border-radius: 14px;
-  padding: 16px 18px;
+  padding: 14px 15px;
   display: flex; flex-direction: column; gap: 8px;
 }
+.np-topline { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .np-label {
   font-family: Georgia, serif; font-size: 11px; letter-spacing: 3px;
   color: var(--gold);
 }
+.np-index { color: #806b44; font: 700 9px/1 "SFMono-Regular", Consolas, monospace; letter-spacing: 1px; }
 .np-station {
-  font-size: 20px; font-weight: 800; line-height: 1.3;
-  word-break: break-all;
+  font-size: clamp(17px, 1.8vw, 20px); font-weight: 800; line-height: 1.25;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden; overflow-wrap: anywhere;
 }
 .np-country { font-size: 15px; color: var(--cream); }
 .np-meta { font-size: 12px; color: var(--muted); min-height: 1em; }
+.np-source-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 2px; }
+.np-source, .np-mode { color: #8e7550; font: 700 8px/1 "SFMono-Regular", Consolas, monospace; letter-spacing: 1px; }
+.np-mode { color: #789a9a; text-align: right; }
 .np-status { font-size: 13px; color: var(--gold); min-height: 1.2em; }
 
 .np-progress {
-  height: 4px; border-radius: 2px;
+  height: 5px; border-radius: 3px;
   background: rgba(255, 255, 255, .08);
   overflow: hidden;
 }
@@ -388,6 +437,7 @@ kbd {
   background: linear-gradient(90deg, var(--gold-dim), var(--gold));
   transition: width .25s linear;
 }
+.np-time { display: flex; justify-content: space-between; color: #7d8290; font: 10px/1 "SFMono-Regular", Consolas, monospace; }
 
 .eq { display: flex; align-items: flex-end; gap: 3px; height: 26px; margin-top: auto; }
 .eq span {
@@ -402,6 +452,9 @@ kbd {
 .eq span:nth-child(5) { animation-delay: .35s; }
 @keyframes eqb { from { height: 18%; } to { height: 100%; } }
 .deck.playing .eq span { animation-play-state: running; }
+.deck-tip { display: inline-flex; align-items: center; gap: 7px; min-width: 0; color: rgba(245, 231, 207, .58); font-size: 10px; }
+.deck-tip kbd { color: #ddc188; font-size: 9px; padding: 3px 5px; }
+.deck-tip span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ================= 像素地球仪（夜航控制台） ================= */
 .globe-card {
@@ -650,10 +703,32 @@ kbd {
 /* ---------------- responsive ---------------- */
 @media (max-width: 860px) {
   .layout { grid-template-columns: 1fr; }
+  .deck-main { flex-wrap: wrap; }
+  .turntable { width: min(420px, 72vw); }
+  .now-playing { width: min(100%, 420px); flex-basis: 240px; }
+}
+
+@media (max-width: 1080px) and (min-width: 861px) {
+  .turntable { width: min(320px, 37vw); }
+  .deck-main { gap: 14px; }
+  .now-playing { flex-basis: 155px; }
+  .edition-note { display: none; }
 }
 
 @media (max-width: 480px) {
   .globe-card { padding: 16px 14px 14px; border-radius: 19px; }
+  .deck, .deck-head, .deck-main, .deck-bar, .now-playing { width: 100%; min-width: 0; }
+  .brand-row, .topbar-subrow { align-items: flex-start; }
+  .brand-row { gap: 8px; }
+  .brand-lockup { gap: 8px; }
+  .title { font-size: 22px; }
+  .header-status { margin-top: 3px; padding: 6px 8px; font-size: 8px; }
+  .brand-orb { width: 36px; height: 36px; font-size: 19px; }
+  .topbar-subrow { padding-left: 0; flex-direction: column; gap: 9px; }
+  .topbar-actions { width: 100%; justify-content: space-between; }
+  .deck { padding: 16px 14px 14px; }
+  .deck-bar { flex-wrap: wrap; justify-content: center; }
+  .deck-tip { flex-basis: 100%; justify-content: center; }
   .globe-stage { min-height: 300px; }
   .globe-heading strong { font-size: 17px; }
   .globe-country { font-size: 19px; }
@@ -661,4 +736,13 @@ kbd {
   .globe-pin-card { min-width: 108px; max-width: 130px; padding: 7px 8px; }
   .globe-signal-row { align-items: flex-start; flex-direction: column; }
   .globe-hint { text-align: left; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: .01ms !important;
+  }
 }

@@ -13,7 +13,12 @@ const npStation = el('np-station');
 const npCountry = el('np-country');
 const npMeta = el('np-meta');
 const npStatus = el('np-status');
+const npProgress = el('np-progress');
 const npProgressFill = el('np-progress-fill');
+const npCurrentTime = el('np-current-time');
+const npDuration = el('np-duration');
+const npMode = el('np-mode');
+const npIndex = el('np-index');
 const globeCountry = el('globe-country');
 const globeHint = el('globe-hint');
 const globeLat = el('globe-lat');
@@ -24,6 +29,11 @@ const globePin = el('globe-pin');
 const globePinCountry = el('globe-pin-country');
 const ledText = el('led-text');
 const btnPlay = el('btn-play');
+const btnNext = el('btn-next');
+const deckBadge = el('deck-badge');
+const deckTipCopy = el('deck-tip-copy');
+const headerStatusText = el('header-status-text');
+const sourceLink = el('source-link');
 const settingsButton = el('settings-button');
 const settingsModal = el('settings-modal');
 const settingsClose = el('settings-close');
@@ -48,6 +58,10 @@ let autoTimer = null;     // 试听结束自动切换的定时器
 let highlightCode = null; // 当前高亮国家（像素地球仪）
 let rot = 0;              // 地球仪旋转（经度，度）
 let targetRot = null;     // 要转到的国家经度（null = 空闲自转）
+let trackNumber = 0;
+let nextRequest = 0;
+let sourceMode = 'itunes';
+let settingsReturnFocus = null;
 
 // 地图呈现归属：保留原始网格编码，但在界面上作为同一显示区域处理。
 const DISPLAY_CODE_ALIASES = { TW: 'CN' };
@@ -107,6 +121,22 @@ function hashHue(str) {
 
 function setStatus(text) { npStatus.textContent = text; }
 
+function setDeckBadge(text, state) {
+  deckBadge.textContent = text;
+  if (state) deckBadge.dataset.state = state;
+  else delete deckBadge.dataset.state;
+}
+
+function updateSourceLabels(mode) {
+  sourceMode = mode === 'jamendo' ? 'jamendo' : 'itunes';
+  const isFullTrack = sourceMode === 'jamendo';
+  headerStatusText.textContent = isFullTrack ? 'FULL TRACKS · JAMENDO' : '30 SEC PREVIEWS · ITUNES';
+  npMode.textContent = isFullTrack ? 'FULL TRACK' : '30 SEC PREVIEW';
+  sourceLink.textContent = isFullTrack ? 'Jamendo' : 'iTunes';
+  sourceLink.href = isFullTrack ? 'https://www.jamendo.com' : 'https://www.apple.com/itunes/';
+  settingsButton.innerHTML = '<span aria-hidden="true">⚙</span> ' + (window.electronAPI ? 'Jamendo 设置' : '播放模式');
+}
+
 function setSettingsStatus(text, isError) {
   settingsStatus.textContent = text || '';
   settingsStatus.style.color = isError ? '#ff8d7b' : '';
@@ -117,9 +147,14 @@ function closeSettings() {
   settingsSave.disabled = false;
   settingsCancel.disabled = false;
   settingsToggleKey.disabled = false;
+  if (settingsReturnFocus && typeof settingsReturnFocus.focus === 'function') {
+    settingsReturnFocus.focus();
+    settingsReturnFocus = null;
+  }
 }
 
 async function openSettings() {
+  settingsReturnFocus = document.activeElement;
   settingsModal.hidden = false;
   setSettingsStatus('');
   settingsClientId.disabled = false;
@@ -130,7 +165,8 @@ async function openSettings() {
     settingsClientId.disabled = true;
     settingsSave.disabled = true;
     settingsToggleKey.disabled = true;
-    setSettingsStatus('请在 Electron 桌面程序中打开此设置入口。', true);
+    setSettingsStatus('浏览器版沿用当前服务模式；如需切换，请使用桌面版设置。', true);
+    settingsClose.focus();
     return;
   }
   try {
@@ -175,6 +211,13 @@ function fmtDuration(sec) {
   return m + ':' + String(s).padStart(2, '0');
 }
 
+function fmtClock(sec) {
+  if (!Number.isFinite(sec) || sec < 0) return '--:--';
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return m + ':' + String(s).padStart(2, '0');
+}
+
 function fmtCoordinate(value, positive, negative) {
   if (!Number.isFinite(value)) return '--°';
   return Math.abs(value).toFixed(1) + '°' + (value >= 0 ? positive : negative);
@@ -193,7 +236,10 @@ function isHighlightedMapCode(code) {
 function togglePlay() {
   if (!current) { next(); return; }
   if (audio.paused) {
-    audio.play().catch(() => setStatus('需要点击页面后播放'));
+    started = true;
+    armWatchdog();
+    setStatus('正在启动音频…');
+    audio.play().catch(() => setStatus('播放失败，请检查网络后重试'));
   } else {
     audio.pause();
   }
@@ -203,6 +249,15 @@ function setPlayingUI(on) {
   deck.classList.toggle('playing', on);
   ledText.textContent = on ? 'ON AIR' : 'STANDBY';
   btnPlay.textContent = on ? '⏸' : '▶';
+  btnPlay.setAttribute('aria-label', on ? '暂停' : '播放');
+  btnPlay.setAttribute('aria-pressed', String(on));
+  if (on) {
+    setDeckBadge('ON AIR', 'live');
+    deckTipCopy.textContent = '正在播放 · 点击唱片暂停';
+  } else if (current) {
+    setDeckBadge('READY TO PLAY');
+    deckTipCopy.textContent = '点击唱片或按空格继续播放';
+  }
 }
 
 function armWatchdog() {
@@ -237,8 +292,15 @@ audio.addEventListener('pause', () => { if (!audio.ended) setPlayingUI(false); }
 audio.addEventListener('timeupdate', () => {
   const d = audio.duration;
   if (d && isFinite(d) && d > 0) {
-    npProgressFill.style.width = Math.min(100, (audio.currentTime / d) * 100) + '%';
+    const progress = Math.min(100, (audio.currentTime / d) * 100);
+    npProgressFill.style.width = progress + '%';
+    npProgress.setAttribute('aria-valuenow', progress.toFixed(0));
+    npCurrentTime.textContent = fmtClock(audio.currentTime);
+    npDuration.textContent = fmtClock(d);
   }
+});
+audio.addEventListener('loadedmetadata', () => {
+  if (isFinite(audio.duration) && audio.duration > 0) npDuration.textContent = fmtClock(audio.duration);
 });
 audio.addEventListener('ended', () => {
   if (!started || !current) return;
@@ -355,11 +417,15 @@ function pollCountry(id) {
         if (!isActive()) return;
         if (j.id != null && String(j.id) !== songId) return;
         if (j.countrycode) { applyCountry(j, songId); return; }
-        if (j.status === 'none' || j.status === 'error') return;
+        if (j.status === 'none') {
+          applyCountry(j, songId);
+          return;
+        }
       } catch (e) { /* 网络错误：稍后重试 */ }
       if (!isActive()) return;
       await new Promise((r) => setTimeout(r, 2500));
     }
+    if (isActive()) setCountry(null, '未知地区');
   })();
 }
 
@@ -405,8 +471,13 @@ function setCountry(code, displayName) {
   const lon = cap ? cap[1] : (code ? countryLon[code] : undefined);
   globeLat.textContent = fmtCoordinate(lat, 'N', 'S');
   globeLon.textContent = fmtCoordinate(lon, 'E', 'W');
-  globeHint.textContent = code ? 'SIGNAL LOCKED · 已锁定' : 'WAITING FOR SIGNAL · 等待定位';
-  globeSignalCopy.textContent = code ? code + ' // TRACKING' : 'WAITING FOR SIGNAL';
+  const pending = !code && displayName === '正在定位…';
+  globeHint.textContent = code
+    ? 'SIGNAL LOCKED · 已锁定'
+    : pending ? 'LOOKUP IN PROGRESS · 正在解析' : 'NO VERIFIED DATA · 暂无可信资料';
+  globeSignalCopy.textContent = code
+    ? code + ' // TRACKING'
+    : pending ? 'LOOKUP IN PROGRESS' : 'NO COUNTRY DATA';
   globePinCountry.textContent = code ? flag + ' ' + name : '——';
   globePin.classList.toggle('is-visible', Boolean(code));
   return code;
@@ -414,14 +485,21 @@ function setCountry(code, displayName) {
 
 function setSong(s) {
   invalidateCountryPoll();
+  setPlayingUI(false);
+  setDeckBadge('LOADING', 'loading');
   current = s;
-  setCountry(s.countrycode, s.country);
+  trackNumber = (trackNumber % 99) + 1;
+  npIndex.textContent = String(trackNumber).padStart(2, '0');
+  setCountry(s.countrycode, s.countrycode ? s.country : '正在定位…');
 
   npStation.textContent = s.title;
   npMeta.textContent = [s.artist, s.album, fmtDuration(s.duration)].filter(Boolean).join(' · ');
   npProgressFill.style.width = '0%';
+  npProgress.setAttribute('aria-valuenow', '0');
+  npCurrentTime.textContent = '0:00';
+  npDuration.textContent = fmtClock(s.duration);
 
-  // 未带国家信息 → 后台解析（MusicBrainz），完成后地球仪亮起并转过去
+  // 未带国家信息 → 后台解析（MusicBrainz 结构化资料），完成后地球仪亮起并转过去
   if (!s.countrycode && s.id) pollCountry(s.id);
 
   // 整张唱片与中心标签共用专辑海报；无封面时使用主题渐变
@@ -446,7 +524,7 @@ function setSong(s) {
   labelTitle.textContent = s.title;
   labelArtist.textContent = s.artist;
 
-  setStatus('连接中…');
+  setStatus(started ? '连接中…' : '已准备 · 点击唱片开始播放');
   audio.src = s.streamUrl;
   audio.load();
   armWatchdog();
@@ -456,19 +534,25 @@ function setSong(s) {
 }
 
 async function next() {
+  const request = ++nextRequest;
   skipCount = 0;
   clearTimeout(autoTimer);
   setStatus('正在切换…');
+  setDeckBadge('SEARCHING', 'loading');
   let s = nextSong;
   nextSong = null;
   if (!s) {
     try {
       s = await fetchSong();
     } catch (e) {
-      setStatus('获取歌曲失败，请重试');
+      if (request === nextRequest) {
+        setStatus('获取歌曲失败，请重试');
+        setDeckBadge('OFFLINE', 'loading');
+      }
       return;
     }
   }
+  if (request !== nextRequest) return;
   setSong(s);
   prefetch();
 }
@@ -805,8 +889,14 @@ function globeLoop(t) {
 }
 
 /* ---------------- 交互 ---------------- */
+function isFormTarget(target) {
+  return target && typeof target.matches === 'function' &&
+    (target.matches('input, textarea, select, button, [contenteditable="true"]') || target.closest('[role="dialog"]'));
+}
+
 window.addEventListener('keydown', (e) => {
   if (e.repeat) return;
+  if (isFormTarget(e.target)) return;
   const k = e.key.toLowerCase();
   if (k === 'r') {
     e.preventDefault();
@@ -820,7 +910,7 @@ window.addEventListener('keydown', (e) => {
 });
 
 btnPlay.addEventListener('click', () => { started = true; togglePlay(); });
-el('btn-next').addEventListener('click', () => { started = true; next(); });
+btnNext.addEventListener('click', () => { started = true; next(); });
 record.addEventListener('click', () => { started = true; togglePlay(); });
 settingsButton.addEventListener('click', openSettings);
 settingsClose.addEventListener('click', closeSettings);
@@ -837,6 +927,17 @@ settingsModal.addEventListener('click', (event) => {
 window.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && !settingsModal.hidden) closeSettings();
 });
+
+async function loadAppInfo() {
+  try {
+    const response = await fetch('/api/info', { cache: 'no-store' });
+    if (!response.ok) return;
+    const info = await response.json();
+    updateSourceLabels(info.mode);
+  } catch (error) {
+    updateSourceLabels('itunes');
+  }
+}
 
 /* ---------------- 启动 ---------------- */
 (async function init() {
@@ -859,12 +960,15 @@ window.addEventListener('keydown', (event) => {
   buildBackdrop();
   requestAnimationFrame(globeLoop);
 
-  prefetch(); // 预取第一首
-  setStatus('按 R 随机播放世界歌曲，或点击唱片');
+  await loadAppInfo();
 
-  // ?demo=1 ：打开页面即自动加载并播放（用于测试/演示）
-  if (new URLSearchParams(location.search).has('demo')) {
-    started = true;
-    next();
+  // 默认先把第一首唱片和地图信息摆出来，避免用户面对空白首屏。
+  // ?demo=1 / ?demo=true：用于展览和演示，打开页面即开始播放。
+  const demoValue = new URLSearchParams(location.search).get('demo');
+  started = demoValue === '1' || demoValue === 'true';
+  await next();
+  if (!started && current) {
+    setDeckBadge('READY TO PLAY');
+    setStatus('已准备 · 点击唱片或按 Space 播放');
   }
 })();

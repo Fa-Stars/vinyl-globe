@@ -4,15 +4,32 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>世界唱片机 · World Vinyl</title>
-  <link rel="stylesheet" href="style.css?v=15">
+  <link rel="stylesheet" href="style.css?v=17">
 </head>
 <body>
   <div class="stage">
 
     <header class="topbar">
-      <h1 class="title">🌍 世界唱片机 <span class="title-en">WORLD VINYL</span></h1>
-      <p class="subtitle">随机播放来自世界任意一个角落的歌曲 —— 按下 <kbd>R</kbd> 切换</p>
-      <button class="settings-button" id="settings-button" type="button">⚙ Jamendo 设置</button>
+      <div class="brand-row">
+        <div class="brand-lockup">
+          <div class="brand-orb" aria-hidden="true">🌍</div>
+          <div>
+            <h1 class="title">世界唱片机</h1>
+            <div class="title-en">WORLD VINYL</div>
+          </div>
+        </div>
+        <div class="header-status" id="header-status">
+          <span class="header-status-dot" aria-hidden="true"></span>
+          <span id="header-status-text">LOCAL LISTENING ROOM</span>
+        </div>
+      </div>
+      <div class="topbar-subrow">
+        <p class="subtitle">让下一首歌带你去一个新的坐标</p>
+        <div class="topbar-actions">
+          <span class="edition-note">DESKTOP EDITION · 01</span>
+          <button class="settings-button" id="settings-button" type="button"><span aria-hidden="true">⚙</span> Jamendo 设置</button>
+        </div>
+      </div>
     </header>
 
     <div class="settings-modal" id="settings-modal" hidden>
@@ -41,6 +58,13 @@
     <main class="layout">
       <!-- 左侧：唱片机 -->
       <section class="deck" id="deck">
+        <div class="deck-head">
+          <div class="deck-heading">
+            <span class="deck-eyebrow">01 · THE DECK</span>
+            <strong>RANDOM PRESSING</strong>
+          </div>
+          <span class="deck-badge" id="deck-badge">READY TO PLAY</span>
+        </div>
         <div class="deck-main">
           <div class="turntable">
             <div class="platter">
@@ -53,7 +77,6 @@
               </div>
               <div class="spindle" id="spindle"></div>
             </div>
-
             <div class="tonearm" id="tonearm">
               <div class="arm"></div>
               <div class="headshell"></div>
@@ -62,12 +85,20 @@
           </div>
 
           <div class="now-playing">
-            <div class="np-label">NOW SPINNING · 正在播放</div>
+            <div class="np-topline">
+              <div class="np-label">NOW SPINNING · 正在播放</div>
+              <span class="np-index" id="np-index">—</span>
+            </div>
             <div class="np-station" id="np-station">——</div>
             <div class="np-country" id="np-country">🌐 ——</div>
             <div class="np-meta" id="np-meta"></div>
-            <div class="np-status" id="np-status">加载中…</div>
-            <div class="np-progress"><div class="np-progress-fill" id="np-progress-fill"></div></div>
+            <div class="np-source-row">
+              <span class="np-source">WORLD VINYL RADIO</span>
+              <span class="np-mode" id="np-mode">LOADING MODE</span>
+            </div>
+            <div class="np-status" id="np-status" role="status" aria-live="polite">加载中…</div>
+            <div class="np-progress" id="np-progress" role="progressbar" aria-label="歌曲播放进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="np-progress-fill" id="np-progress-fill"></div></div>
+            <div class="np-time"><span id="np-current-time">0:00</span><span id="np-duration">--:--</span></div>
             <div class="eq" id="eq"><span></span><span></span><span></span><span></span><span></span></div>
           </div>
         </div>
@@ -78,9 +109,10 @@
             <span class="led-text" id="led-text">STANDBY</span>
           </div>
           <div class="controls">
-            <button class="btn" id="btn-next" title="随机下一首 (R)">⏭</button>
-            <button class="btn" id="btn-play" title="播放 / 暂停 (Space)">▶</button>
+            <button class="btn" id="btn-next" title="随机下一首 (R)" aria-label="随机下一首">⏭</button>
+            <button class="btn btn-primary" id="btn-play" title="播放 / 暂停 (Space)" aria-label="播放" aria-pressed="false">▶</button>
           </div>
+          <div class="deck-tip"><kbd>SPACE</kbd><span id="deck-tip-copy">点击唱片或按空格开始播放</span></div>
         </div>
       </section>
 
@@ -131,12 +163,12 @@
     </main>
 
     <footer class="footer">
-      <span><kbd>R</kbd> 随机切换 · <kbd>Space</kbd> 播放/暂停 · 点击唱片暂停 · 歌曲结束自动连播</span>
-      <span class="credit">歌曲来自 <a href="https://www.jamendo.com" target="_blank" rel="noopener">Jamendo</a> · 地图数据来自 Natural Earth</span>
+      <span><kbd>R</kbd> 随机切换 · <kbd>Space</kbd> 播放/暂停 · 点击唱片播放/暂停 · 歌曲结束自动连播</span>
+      <span class="credit">歌曲来自 <a id="source-link" href="https://www.jamendo.com" target="_blank" rel="noopener">Jamendo</a> · 地图数据来自 Natural Earth</span>
     </footer>
   </div>
 
   <audio id="audio" preload="none"></audio>
-  <script src="app.js?v=15"></script>
+  <script src="app.js?v=17"></script>
 </body>
 </html>

@@ -21,15 +21,18 @@
     "directories": {
       "output": "desktop/release"
     },
+    "icon": "build/icon.svg",
     "files": [
       "desktop/electron/**/*",
       "web/server.js",
+      "web/country-resolver.js",
       "web/public/**/*",
       "runtime-cache.js",
       "package.json"
     ],
     "asarUnpack": [
       "web/server.js",
+      "web/country-resolver.js",
       "web/public/**/*",
       "runtime-cache.js"
     ],
