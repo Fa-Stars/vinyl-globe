@@ -79,7 +79,7 @@ test('a hung song request times out instead of leaving the controls searching fo
       return new Promise((_resolve, reject) => signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true }));
     },
   });
-  await player.tick(21000);
+  await player.tick(46000);
   assert.equal(player.requests[0].signal?.aborted, true);
   assert.match(player.status, /失败|超时/);
 });

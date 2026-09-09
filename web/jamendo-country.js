@@ -40,4 +40,4 @@ async function lookupJamendoCountry(name, artistId, { clientId, countries, fetch
   }
 }
 
-module.exports = { lookupJamendoCountry, selectLocation };
+module.exports = { lookupJamendoCountry, selectLocation, countryCodes: [...new Set([...Object.values(ISO), 'SX'])] };

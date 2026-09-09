@@ -1,6 +1,8 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const {createDiscovery} = require('../web/random-discovery');
 const {startBackend} = require('../test-support/backend.cjs');
 
@@ -64,4 +66,10 @@ test('playback continuously replenishes remote candidates, never chooses based o
   assert.equal(tracks.size,15);
   assert.ok(calls>6,'remote discovery must continue beyond initial buffer');
   assert.ok(batches>0,'locations should be fetched as a batch');
+  // Allow the debounced disk write to finish; a restart must only restore
+  // upcoming songs, not turn already played history into another playlist.
+  await new Promise(resolve=>setTimeout(resolve,300));
+  const saved=JSON.parse(fs.readFileSync(path.join(backend.root,'jamendo/pool.json')));
+  assert.ok(saved.length<=6,'look-ahead buffer is bounded');
+  assert.ok(saved.every(song=>!tracks.has(song.id)),'played songs must leave the saved buffer');
 });

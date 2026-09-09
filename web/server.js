@@ -20,7 +20,7 @@ const path = require('path');
 const { Readable } = require('stream');
 const { pipeline } = require('stream/promises');
 const { clearRuntimeCache } = require('../runtime-cache');
-const { lookupJamendoCountry, selectLocation } = require('./jamendo-country');
+const { lookupJamendoCountry, selectLocation, countryCodes: artistCountryCodes } = require('./jamendo-country');
 const { createDiscovery } = require('./random-discovery');
 const verifiedCountries = require('./verified-artist-countries.json');
 const jamendoCountrySeed = require('./jamendo-country-seed.json');
@@ -219,6 +219,10 @@ const COUNTRY_NAMES = {
   VE:'委内瑞拉', VG:'英属维尔京群岛', VN:'越南', YE:'也门', ZA:'南非', ZM:'赞比亚',
   ZW:'津巴布韦', PR:'波多黎各', SX:'荷属圣马丁',
 };
+
+// Artist locations are not limited to countries with an iTunes storefront.
+const regionNames = new Intl.DisplayNames(['zh-Hans'], {type:'region'});
+for (const code of artistCountryCodes) if (!COUNTRY_NAMES[code]) COUNTRY_NAMES[code] = regionNames.of(code);
 
 const state = {
   songsByCountry: new Map(), // code -> song[]（仅 iTunes 模式）
@@ -683,7 +687,7 @@ async function fetchJamendoPool() {
   const pending = jamendoPool.filter(s => !deliveredSongs.has(s.id));
   const history = jamendoPool.filter(s => deliveredSongs.has(s.id)).slice(-16);
   const next = [...history, ...pending, ...all];
-  writeJsonAtomic(POOL_FILE, next);
+  writeJsonAtomic(POOL_FILE, [...pending, ...all]);
   jamendoPool = next;
   Object.assign(urlMap, freshUrls);
   saveUrlMap();
@@ -711,12 +715,13 @@ function pickJamendoSong() {
       state.lastKey = key;
       playedAudioIds.delete(s.id);
       deliveredSongs.add(s.id);
+      scheduleJamendoPoolSave();
       if (deliveredSongs.size > 1000) deliveredSongs.delete(deliveredSongs.values().next().value);
       return s;
     }
   }
   const s = candidates[randomIndex(candidates.length)];
-  if (s) { playedAudioIds.delete(s.id); deliveredSongs.add(s.id); }
+  if (s) { playedAudioIds.delete(s.id); deliveredSongs.add(s.id); scheduleJamendoPoolSave(); }
   return s;
 }
 
@@ -911,7 +916,10 @@ function cachedArtistCountry(name) {
   const songs = jamendoPool.filter(song => normalizeArtistName(song.artist) === key);
   const evidence = songs.map(evidenceCountryForSong);
   if (evidence.length && evidence.every(rec => rec && rec.code === evidence[0].code)) return evidence[0];
-  return artistCountry[key] || artistCountry[raw] || null;
+  const cached = artistCountry[key] || artistCountry[raw] || null;
+  const ids = [...new Set(songs.map(song => song.artistId).filter(Boolean))];
+  if (ids.length && (!cached || ids.length !== 1 || cached.artistId !== ids[0])) return null;
+  return cached;
 }
 
 function isFreshCountryRecord(rec) {
@@ -975,7 +983,7 @@ function scheduleJamendoPoolSave() {
     poolSaveTimer = null;
     try {
       fs.mkdirSync(SONGS_DIR, { recursive: true });
-      fs.writeFileSync(POOL_FILE, JSON.stringify(jamendoPool));
+      fs.writeFileSync(POOL_FILE, JSON.stringify(jamendoPool.filter(s => !deliveredSongs.has(s.id))));
     } catch (e) { /* ignore */ }
   }, 250);
 }
@@ -986,6 +994,7 @@ function annotatePoolCountry(artist, rec) {
   let changed = false;
   for (const song of jamendoPool) {
     if (normalizeArtistName(song.artist) !== key) continue;
+    if (rec && rec.artistId && song.artistId && rec.artistId !== song.artistId) continue;
     if (!rec || !rec.code || !isTrustedCountryRecord(rec)) {
       if (
         song.countrycode ||
@@ -1207,6 +1216,8 @@ async function mbLookup(name) {
 function resolveArtistCountry(name) {
   const key = normalizeArtistName(name);
   if (!key) return Promise.resolve(null);
+  const matchingIds = new Set(jamendoPool.filter(s => normalizeArtistName(s.artist) === key).map(s => s.artistId).filter(Boolean));
+  if (matchingIds.size > 1) return Promise.resolve(null);
   const cached = cachedArtistCountry(key);
   if (isFreshCountryRecord(cached)) {
     return Promise.resolve(isTrustedCountryRecord(cached) && cached.code ? cached : null);
@@ -1233,6 +1244,7 @@ function resolveArtistCountry(name) {
       code: code || null,
       country: code ? (COUNTRY_NAMES[code] || code) : null,
       source: code ? source : 'none',
+      artistId: artistIds.length === 1 ? artistIds[0] : '',
       sourceUrl: lookup.sourceUrl || (code ? 'https://musicbrainz.org/search?type=artist&query=' + encodeURIComponent(key) : ''),
       resolverVersion: COUNTRY_RESOLVER_VERSION,
       ts: Date.now(),
@@ -1261,7 +1273,8 @@ function prefetchCountryBatch(songs) {
   })().catch(() => []);
   for (const song of pending) {
     const key = normalizeArtistName(song.artist);
-    inflightCountry[key] = batch.then(artists => {
+    const namesakes = new Set(jamendoPool.filter(s => normalizeArtistName(s.artist) === key).map(s => s.artistId).filter(Boolean));
+    const task = batch.then(artists => {
       const location = selectLocation(artists, key, song.artistId, COUNTRY_NAMES);
       if (!location) return null; // Missing metadata can still use MusicBrainz.
       const rec = {...location,country:COUNTRY_NAMES[location.code],resolverVersion:COUNTRY_RESOLVER_VERSION,ts:Date.now()};
@@ -1269,7 +1282,10 @@ function prefetchCountryBatch(songs) {
       annotatePoolCountry(key,rec);
       saveArtistCountries();
       return rec;
-    }).finally(() => { delete inflightCountry[key]; });
+    }).catch(() => null);
+    if (namesakes.size === 1) {
+      inflightCountry[key] = task.finally(() => { delete inflightCountry[key]; });
+    }
   }
 }
 

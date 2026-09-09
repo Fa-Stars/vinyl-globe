@@ -1,5 +1,21 @@
 # Country evidence research — 2026-09-08
 
+The coverage figures below describe a historical verification sample, not the
+player's selection range. The player now samples random positions in Jamendo's
+live catalog, including singles and album tracks, and continuously replaces a
+six-song look-ahead buffer. Country evidence never determines which track is
+selected. See the [official track endpoint](https://developer.jamendo.com/v3.0/tracks)
+for `fullcount`, `offset`, `type` and ordering semantics, and the
+[artist location endpoint](https://developer.jamendo.com/v3.0/artists/locations)
+for batch lookup by artist IDs.
+
+A live verification returned a catalog size of 856,276 tracks. Four random
+positions produced Giovanni Anastasi, SONIC MYSTERY, Tomasz Raszko and
+CachaTeleFunken in 21.3 seconds; the subsequent single location request returned
+Italy, Slovenia, Poland and Spain in 254 ms. These are one-run measurements,
+not a latency guarantee. Deep catalog pagination remains the slower operation;
+the small rolling buffer overlaps it with current playback.
+
 The bundled mappings in `web/verified-artist-countries.json` record evidence URLs and identity checks. These identify the artist's musical base/origin region, not the language of the song, recording location, citizenship, or ethnicity. Locations of artist-controlled profiles are accepted; birthplace/origin is preferred when explicitly documented. The lookup must not infer from an artist's name alone.
 
 The first research pass added 18 verified names, covering 59 previously unknown tracks in the inspected 360-track pool. A second pass added six more names (eight tracks) below. All 24 entries have scoped Jamendo artist IDs and track IDs from the retrieved catalogue. Most evidence comes from artist-controlled SoundCloud, Bandcamp, Myspace, ReverbNation or official band websites. Jasmine Jordan, Robert Avellanet and The Very Sexuals are supported by direct interviews identifying the relevant release. StrangeZero uses its EP distribution partner's biography and an artist-controlled track identity cross-check. Full evidence and links are stored with each mapping.
