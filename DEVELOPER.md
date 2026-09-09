@@ -96,7 +96,7 @@ vinyl-globe/
     ├── config.json      # Jamendo key 配置
     ├── jamendo/pool.json        # 歌曲池缓存
     ├── songs/           # iTunes 兜底模式缓存
-    ├── audio/           # 音频预下载缓存（10 首流水线）
+    ├── audio/           # 音频预下载缓存（4 首流水线）
     ├── artist-countries.json    # 艺术家国籍解析缓存
     └── ne_110m_admin_0_countries.geojson  # 地图源数据（build-map 用）
 ```

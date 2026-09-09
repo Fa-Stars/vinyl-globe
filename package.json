@@ -6,6 +6,7 @@
   "main": "desktop/electron/main.js",
   "private": true,
   "scripts": {
+    "test": "node --test",
     "start": "electron .",
     "pack": "electron-builder --dir",
     "dist": "electron-builder --win nsis portable"
@@ -28,23 +29,35 @@
       "web/country-resolver.js",
       "web/public/**/*",
       "runtime-cache.js",
-      "package.json"
+      "package.json",
+      "web/jamendo-country.js",
+      "web/jamendo-country-seed.json",
+      "web/verified-artist-countries.json",
+      "web/random-discovery.js"
     ],
     "asarUnpack": [
       "web/server.js",
       "web/country-resolver.js",
       "web/public/**/*",
-      "runtime-cache.js"
+      "runtime-cache.js",
+      "web/jamendo-country.js",
+      "web/jamendo-country-seed.json",
+      "web/verified-artist-countries.json",
+      "web/random-discovery.js"
     ],
     "win": {
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         },
         {
           "target": "portable",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ]
     },

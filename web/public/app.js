@@ -50,8 +50,10 @@ const gctx = globe.getContext('2d');
 let map = { w: 144, h: 72, grid: '', names: {}, aliases: {} };
 let current = null;       // 当前歌曲
 let nextSong = null;      // 预取的下一首
-let fetching = null;      // 预取 Promise
-let started = false;      // 用户是否已交互（浏览器自动播放策略）
+let fetching = null;      // 可取消的下一首预取
+let activeSongRequest = null;
+let started = false;      // 用户当前是否希望继续播放（暂停会取消自动恢复）
+let playbackState = 'idle';
 let skipCount = 0;
 let watchdog = null;
 let autoTimer = null;     // 试听结束自动切换的定时器
@@ -62,6 +64,10 @@ let trackNumber = 0;
 let nextRequest = 0;
 let sourceMode = 'itunes';
 let settingsReturnFocus = null;
+
+// 歌曲接口挂起时及时释放播放控制，避免实体按钮/网页长期停在切换状态。
+// 后端外部请求有自己的 12 秒超时，20 秒给有限的预缓存等待留出余量。
+const SONG_REQUEST_TIMEOUT_MS = 20000;
 
 // 地图呈现归属：保留原始网格编码，但在界面上作为同一显示区域处理。
 const DISPLAY_CODE_ALIASES = { TW: 'CN' };
@@ -234,15 +240,63 @@ function isHighlightedMapCode(code) {
 
 /* ---------------- 音频控制 ---------------- */
 function togglePlay() {
-  if (!current) { next(); return; }
-  if (audio.paused) {
-    started = true;
-    armWatchdog();
-    setStatus('正在启动音频…');
-    audio.play().catch(() => setStatus('播放失败，请检查网络后重试'));
-  } else {
-    audio.pause();
+  if (started || !audio.paused) {
+    stopPlayback('paused', '已暂停 · 点击唱片继续播放');
+    return;
   }
+  started = true;
+  skipCount = 0;
+  if (!current) { next(); return; }
+  requestPlayback();
+}
+
+function clearPlaybackTimers() {
+  clearTimeout(watchdog);
+  clearTimeout(autoTimer);
+  watchdog = null;
+  autoTimer = null;
+}
+
+function setPlaybackState(state, message) {
+  playbackState = state;
+  setPlayingUI(state === 'playing');
+  const badge = {
+    loading: 'SEARCHING', buffering: 'BUFFERING', retrying: 'RETRYING',
+    offline: 'OFFLINE', error: 'STOPPED',
+  }[state];
+  if (badge) setDeckBadge(badge, 'loading');
+  btnPlay.textContent = started ? '⏸' : '▶';
+  btnPlay.setAttribute('aria-label', started ? '暂停' : '播放');
+  btnPlay.setAttribute('aria-pressed', String(started));
+  if (started && state !== 'playing') deckTipCopy.textContent = '正在准备播放 · 点击唱片暂停';
+  else if (state === 'ready') deckTipCopy.textContent = '点击唱片或按空格开始播放';
+  if (message) setStatus(message);
+}
+
+function stopPlayback(state, message) {
+  started = false;
+  nextRequest++;
+  if (activeSongRequest) activeSongRequest.controller.abort();
+  if (fetching) fetching.controller.abort();
+  activeSongRequest = null;
+  fetching = null;
+  clearPlaybackTimers();
+  setPlaybackState(state, message);
+  audio.pause();
+}
+
+function requestPlayback() {
+  const request = nextRequest;
+  setPlaybackState('buffering', '正在启动音频…');
+  armWatchdog();
+  audio.play().catch((error) => {
+    if (request !== nextRequest || !started) return;
+    if (error.name === 'NotAllowedError') {
+      stopPlayback('blocked', '浏览器已阻止自动播放 · 点击播放继续');
+    } else {
+      autoSkip('播放失败，正在重试…');
+    }
+  });
 }
 
 function setPlayingUI(on) {
@@ -261,34 +315,58 @@ function setPlayingUI(on) {
 }
 
 function armWatchdog() {
-  clearTimeout(watchdog);
+  if (!started || watchdog !== null) return;
+  const request = nextRequest;
+  const position = audio.currentTime;
   watchdog = setTimeout(() => {
-    if (!started) return;
-    if (audio.readyState >= 3) return; // 已能播放
-    autoSkip('连接超时，正在跳过…');
+    watchdog = null;
+    if (!started || request !== nextRequest) return;
+    if (!audio.paused && audio.currentTime > position) {
+      armWatchdog();
+      return;
+    }
+    autoSkip('播放长时间未推进，正在换一首…');
   }, 10000);
 }
 
 function autoSkip(reason) {
-  setStatus(reason);
+  if (!started || playbackState === 'retrying') return;
+  clearPlaybackTimers();
+  if (navigator.onLine === false) {
+    setPlaybackState('offline', '网络已断开 · 恢复连接后继续播放');
+    audio.pause();
+    return;
+  }
   skipCount++;
   if (skipCount >= 8) {
+    stopPlayback('error');
     setStatus('连续失败，请稍后重试（或再按 R）');
     return;
   }
-  setTimeout(next, 400);
+  setPlaybackState('retrying', reason);
+  audio.pause();
+  autoTimer = setTimeout(() => { autoTimer = null; next('retry'); }, Math.min(400 * 2 ** (skipCount - 1), 4000));
 }
 
 audio.addEventListener('playing', () => {
-  setPlayingUI(true);
+  if (!started || audio.paused || ['loading', 'retrying'].includes(playbackState)) return;
   skipCount = 0;
-  clearTimeout(watchdog);
-  clearTimeout(autoTimer);
-  if (current) setStatus('播放中 · ' + current.title);
+  clearPlaybackTimers();
+  setPlaybackState('playing', current ? '播放中 · ' + current.title : '播放中');
+  armWatchdog();
 });
-audio.addEventListener('waiting', () => setStatus('缓冲中…'));
-audio.addEventListener('stalled', () => setStatus('缓冲中…'));
-audio.addEventListener('pause', () => { if (!audio.ended) setPlayingUI(false); });
+function onBuffering() {
+  if (!started || !['playing', 'buffering'].includes(playbackState)) return;
+  setPlaybackState('buffering', '缓冲中…');
+  armWatchdog();
+}
+audio.addEventListener('waiting', onBuffering);
+audio.addEventListener('stalled', onBuffering);
+audio.addEventListener('pause', () => {
+  if (audio.paused && !audio.ended && started && ['playing', 'buffering'].includes(playbackState)) {
+    stopPlayback('paused', '已暂停 · 点击唱片继续播放');
+  }
+});
 audio.addEventListener('timeupdate', () => {
   const d = audio.duration;
   if (d && isFinite(d) && d > 0) {
@@ -311,20 +389,28 @@ audio.addEventListener('ended', () => {
       fetch(url, { method: 'POST', keepalive: true, cache: 'no-store' }).catch(() => {});
     }
   }
-  setPlayingUI(false);
-  setStatus('歌曲结束，自动播放下一首…');
-  clearTimeout(autoTimer);
-  autoTimer = setTimeout(next, 700);
+  clearPlaybackTimers();
+  setPlaybackState('ended', '歌曲结束，自动播放下一首…');
+  autoTimer = setTimeout(() => { autoTimer = null; next('ended'); }, 700);
 });
 audio.addEventListener('error', () => {
-  if (started && current) autoSkip('音频加载失败，正在换一首…');
+  if (started && current && ['playing', 'buffering'].includes(playbackState)) {
+    autoSkip('音频加载失败，正在换一首…');
+  }
 });
 
 /* ---------------- 歌曲切换 ---------------- */
-async function fetchSong() {
-  const r = await fetch('/api/song');
-  if (!r.ok) throw new Error('api ' + r.status);
-  return r.json();
+function fetchSong() {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SONG_REQUEST_TIMEOUT_MS);
+  const promise = (async () => {
+    const r = await fetch('/api/song', { signal: controller.signal, cache: 'no-store' });
+    if (!r.ok) throw new Error('api ' + r.status);
+    const song = await r.json();
+    if (!song || typeof song.streamUrl !== 'string' || !song.streamUrl) throw new Error('invalid song');
+    return song;
+  })().finally(() => clearTimeout(timeout));
+  return { controller, promise };
 }
 
 const artworkCache = new Map();
@@ -383,12 +469,17 @@ function artworkUrlFor(url) {
 }
 
 function prefetch() {
-  fetching = fetchSong()
+  if (fetching || nextSong) return;
+  const task = fetchSong();
+  fetching = task;
+  task.promise
     .then((s) => {
+      if (fetching !== task) return;
       nextSong = s;
       s.artworkReady = preloadArtwork(s.artwork);
     })
-    .catch(() => { nextSong = null; });
+    .catch(() => {})
+    .finally(() => { if (fetching === task) fetching = null; });
 }
 
 // 歌曲开始后，异步解析艺术家国籍并点亮地球仪（未解析到时轮询）
@@ -485,8 +576,6 @@ function setCountry(code, displayName) {
 
 function setSong(s) {
   invalidateCountryPoll();
-  setPlayingUI(false);
-  setDeckBadge('LOADING', 'loading');
   current = s;
   trackNumber = (trackNumber % 99) + 1;
   npIndex.textContent = String(trackNumber).padStart(2, '0');
@@ -524,32 +613,37 @@ function setSong(s) {
   labelTitle.textContent = s.title;
   labelArtist.textContent = s.artist;
 
-  setStatus(started ? '连接中…' : '已准备 · 点击唱片开始播放');
   audio.src = s.streamUrl;
   audio.load();
-  armWatchdog();
-  if (started) {
-    audio.play().catch(() => { /* 静默，等用户交互 */ });
-  }
+  if (started) requestPlayback();
+  else setPlaybackState('ready', '已准备 · 点击唱片开始播放');
 }
 
-async function next() {
+async function next(reason = 'manual') {
   const request = ++nextRequest;
-  skipCount = 0;
-  clearTimeout(autoTimer);
-  setStatus('正在切换…');
-  setDeckBadge('SEARCHING', 'loading');
+  if (activeSongRequest) activeSongRequest.controller.abort();
+  activeSongRequest = null;
+  if (reason === 'manual') { skipCount = 0; started = true; }
+  clearPlaybackTimers();
+  setPlaybackState('loading', '正在切换…');
+  audio.pause();
   let s = nextSong;
   nextSong = null;
   if (!s) {
+    // 接管正在进行的预取；再次切歌时取消它，迟到的响应不能写回下一首。
+    const task = fetching || fetchSong();
+    fetching = null;
+    activeSongRequest = task;
     try {
-      s = await fetchSong();
+      s = await task.promise;
     } catch (e) {
       if (request === nextRequest) {
-        setStatus('获取歌曲失败，请重试');
-        setDeckBadge('OFFLINE', 'loading');
+        if (started) autoSkip('获取歌曲失败，正在重试…');
+        else setPlaybackState(navigator.onLine === false ? 'offline' : 'error', '获取歌曲失败或超时 · 点击播放重试');
       }
       return;
+    } finally {
+      if (activeSongRequest === task) activeSongRequest = null;
     }
   }
   if (request !== nextRequest) return;
@@ -900,18 +994,21 @@ window.addEventListener('keydown', (e) => {
   const k = e.key.toLowerCase();
   if (k === 'r') {
     e.preventDefault();
-    started = true;
     next();
   } else if (k === ' ') {
     e.preventDefault();
-    started = true;
     togglePlay();
   }
 });
 
-btnPlay.addEventListener('click', () => { started = true; togglePlay(); });
-btnNext.addEventListener('click', () => { started = true; next(); });
-record.addEventListener('click', () => { started = true; togglePlay(); });
+btnPlay.addEventListener('click', togglePlay);
+btnNext.addEventListener('click', () => next());
+record.addEventListener('click', togglePlay);
+window.addEventListener('online', () => {
+  if (playbackState !== 'offline') return;
+  if (started) next('retry');
+  else if (!current) next('initial');
+});
 settingsButton.addEventListener('click', openSettings);
 settingsClose.addEventListener('click', closeSettings);
 settingsCancel.addEventListener('click', closeSettings);
@@ -941,6 +1038,9 @@ async function loadAppInfo() {
 
 /* ---------------- 启动 ---------------- */
 (async function init() {
+  // 只在启动时读取演示意愿；异步初始化完成后不能覆盖用户已做出的操作。
+  const demoValue = new URLSearchParams(location.search).get('demo');
+  started = demoValue === '1' || demoValue === 'true';
   startBrowserSession();
   try {
     const r = await fetch('map.json');
@@ -959,16 +1059,11 @@ async function loadAppInfo() {
   globe.height = GH;
   buildBackdrop();
   requestAnimationFrame(globeLoop);
+  if (current) setCountry(current.countrycode, current.country);
 
   await loadAppInfo();
 
   // 默认先把第一首唱片和地图信息摆出来，避免用户面对空白首屏。
   // ?demo=1 / ?demo=true：用于展览和演示，打开页面即开始播放。
-  const demoValue = new URLSearchParams(location.search).get('demo');
-  started = demoValue === '1' || demoValue === 'true';
-  await next();
-  if (!started && current) {
-    setDeckBadge('READY TO PLAY');
-    setStatus('已准备 · 点击唱片或按 Space 播放');
-  }
+  if (nextRequest === 0) await next('initial');
 })();

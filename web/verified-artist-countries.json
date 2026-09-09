@@ -1,0 +1,285 @@
+{
+  "JekK": {
+    "code": "FR",
+    "sourceUrl": "https://soundcloud.com/jekkmusic",
+    "evidence": "Artist profile says two guys from Paris; matching tracks Survive, Roses, You And Me and First.",
+    "verifiedAt": "2026-09-08",
+    "trackIds": [
+      "1157362",
+      "1157358",
+      "1353511",
+      "1528165",
+      "1093792",
+      "1093794",
+      "1157361",
+      "1353512",
+      "1093795"
+    ],
+    "artistId": "440692"
+  },
+  "Lyonn": {
+    "code": "US",
+    "sourceUrl": "https://soundcloud.com/lyonnmusic",
+    "evidence": "Artist profile location Los Angeles; matching tracks The Symphony, We'll Light The Sky, Shining Eyes, Iceberg and Empty Bed.",
+    "verifiedAt": "2026-09-08",
+    "trackIds": [
+      "1215788",
+      "1342712",
+      "1215787",
+      "1215789",
+      "1215790"
+    ],
+    "artistId": "440873"
+  },
+  "Melanie Ungar": {
+    "code": "CA",
+    "sourceUrl": "https://www.reverbnation.com/melanieungar/song/14783253-open",
+    "evidence": "Artist's Open song page and first-person biography give Toronto, ON, CA. Open is on the same What Is Love release.",
+    "verifiedAt": "2026-09-08",
+    "trackIds": [
+      "1204669",
+      "1480482",
+      "1204670",
+      "1204663"
+    ],
+    "artistId": "463402"
+  },
+  "Manhat10": {
+    "code": "RU",
+    "sourceUrl": "https://manhat10.bandcamp.com/track/-",
+    "evidence": "Artist Bandcamp location Moscow, Russia. Matching identity cross-checked against https://soundcloud.com/manhattan-12 listing Dreams, Fine, Take It and Dance With Me.",
+    "verifiedAt": "2026-09-08",
+    "trackIds": [
+      "1215808",
+      "1215805",
+      "1215804",
+      "1215807"
+    ],
+    "artistId": "466853"
+  },
+  "Jasmine Jordan": {
+    "code": "US",
+    "sourceUrl": "https://voyagela.com/interview/meet-jasmine-jordan-singersongwriter-la/",
+    "evidence": "First-person interview says she moved to LA in 2012 and recorded Time Travel EP with Andre de Santanna in North Hollywood. Pool album is Time Travel EP.",
+    "verifiedAt": "2026-09-08",
+    "trackIds": [
+      "1230403",
+      "1230404",
+      "1230406",
+      "1230405"
+    ],
+    "artistId": "471621"
+  },
+  "The Monster Brothers": {
+    "code": "CH",
+    "sourceUrl": "https://themonsterbrothers.bandcamp.com/merch",
+    "evidence": "Artist Bandcamp location Lugano, Switzerland and Colossus album. Artist biography corroborates Swiss band formation: https://mx3.ch/themonsterbrothers .",
+    "verifiedAt": "2026-09-08",
+    "trackIds": [
+      "856136",
+      "856142",
+      "856137"
+    ],
+    "artistId": "372880"
+  },
+  "Mike Falzone and the Peppermint Trick": {
+    "code": "US",
+    "sourceUrl": "https://myspace.com/mikefalzone",
+    "evidence": "Artist profile Mike Falzone & The Peppermint Trick says Stratford, CT and lists Do it for the Story, matching the pool album.",
+    "verifiedAt": "2026-09-08",
+    "trackIds": [
+      "482090",
+      "482091",
+      "482088"
+    ],
+    "artistId": "355673"
+  },
+  "Mike Falzone": {
+    "code": "US",
+    "sourceUrl": "https://myspace.com/mikefalzone",
+    "evidence": "Artist profile says Stratford, CT and lists More Than Just a Little Bit, matching the pool track of this artist.",
+    "verifiedAt": "2026-09-08",
+    "trackIds": [
+      "708495",
+      "708494"
+    ],
+    "artistId": "365735"
+  },
+  "pornophonique": {
+    "code": "DE",
+    "sourceUrl": "https://pornophonique.bandcamp.com/",
+    "evidence": "Artist Bandcamp location Darmstadt, Germany and 8-bit lagerfeuer release, matching the pool album.",
+    "verifiedAt": "2026-09-08",
+    "trackIds": [
+      "81740",
+      "81742"
+    ],
+    "artistId": "8303"
+  },
+  "Modern Pitch": {
+    "code": "IT",
+    "sourceUrl": "https://sites.google.com/view/modern-pitch/home",
+    "evidence": "Official band site identifies band from Marche, Italy and explicitly lists Boys, Girls, Toys & Words, These Nights, Eye Of The Storm and Jamendo distribution.",
+    "verifiedAt": "2026-09-08",
+    "trackIds": [
+      "1165005",
+      "1133992"
+    ],
+    "artistId": "444576"
+  },
+  "Backnbloom": {
+    "code": "US",
+    "sourceUrl": "https://backnbloom.bandcamp.com/album/backnbloom-ep",
+    "evidence": "Artist Bandcamp location Los Angeles, California; artist-controlled discography includes Music for the Modern Monkey and Let it Go EP.",
+    "verifiedAt": "2026-09-08",
+    "trackIds": [
+      "1071004",
+      "1071006"
+    ],
+    "artistId": "438400"
+  },
+  "STEEP": {
+    "code": "DE",
+    "sourceUrl": "https://www.steep-music.de/",
+    "evidence": "Official band site identifies four musicians from Munich, explicitly lists Let Me Go and Jamendo, and album Your Reality.",
+    "verifiedAt": "2026-09-08",
+    "trackIds": [
+      "1162014",
+      "43886"
+    ],
+    "artistId": "4777"
+  },
+  "Chaz Robinson": {
+    "code": "US",
+    "sourceUrl": "https://www.chazrobinson.com/biography",
+    "evidence": "Official artist biography identifies Indianapolis, IN and explicitly names Love Will Come Back Again, matching the pool track.",
+    "verifiedAt": "2026-09-08",
+    "trackIds": [
+      "1141572",
+      "1141571"
+    ],
+    "artistId": "451022"
+  },
+  "Professor Kliq": {
+    "code": "US",
+    "sourceUrl": "https://professorkliq.bandcamp.com/album/the-scientific-method-volume-ii-experiments-in-sound-perspective",
+    "evidence": "Artist Bandcamp biography says born and raised in Chicago suburbs; location Portland, Oregon. Tracklist contains Pangea, matching the pool track.",
+    "verifiedAt": "2026-09-08",
+    "trackIds": [
+      "443379"
+    ],
+    "artistId": "339989"
+  },
+  "StrangeZero": {
+    "code": "GR",
+    "sourceUrl": "https://www.muzitee.com/featured-artists/strangezero",
+    "evidence": "Band's exclusive EP distribution partner identifies Greek electronic band and Rapidly Unexpected EP, matching pool album. Artist's own https://soundcloud.com/strangezero/burning-star corroborates track and release identity.",
+    "verifiedAt": "2026-09-08",
+    "trackIds": [
+      "1378740"
+    ],
+    "artistId": "3799"
+  },
+  "Egor Budennyy": {
+    "code": "RU",
+    "sourceUrl": "https://soundcloud.com/egor-budenny",
+    "evidence": "Artist SoundCloud profile identifies Egor Budennyy, Moscow; same named artist also releases N.N. and RED LIGHT through Jamendo.",
+    "verifiedAt": "2026-09-08",
+    "trackIds": [
+      "1932670"
+    ],
+    "artistId": "510867"
+  },
+  "Robert Avellanet": {
+    "code": "PR",
+    "sourceUrl": "https://www.primerahora.com/entretenimiento/musica/notas/ex-menudo-robert-avellanet-lanza-disco-en-ingles-video/amp/",
+    "evidence": "Contemporaneous EFE interview identifies Puerto Rican artist and explicitly discusses When I Have You from Heart and Soul, matching pool track and album. Uses origin region, not later LA residence.",
+    "verifiedAt": "2026-09-08",
+    "trackIds": [
+      "1119654",
+      "1119658",
+      "1119686",
+      "1119660",
+      "1119655",
+      "1119656",
+      "1119687",
+      "1119657",
+      "1119659",
+      "1119677"
+    ],
+    "artistId": "443445"
+  },
+  "The Very Sexuals": {
+    "code": "NL",
+    "sourceUrl": "https://3voor12.vpro.nl/artikelen/overzicht/2008/juli/goud-graven-met-the-very-sexuals-ac-berkheimer-sparklehorse-iron-wine.html",
+    "evidence": "Direct VPRO interview identifies Joep van Son and Utrecht singer Pien Feith's project with matching Post-Apocalyptic Love album; corroborating distributor country Netherlands at https://music.bugs.co.kr/artist/80188537 .",
+    "verifiedAt": "2026-09-08",
+    "trackIds": [
+      "304926",
+      "304927"
+    ],
+    "artistId": "348433"
+  },
+  "Pokki DJ": {
+    "code": "IT",
+    "sourceUrl": "https://www.prweb.com/releases/Canadian_Country_Artist_Eric_Ethridge_Wins_Prestigious_Grand_Prize_in_2018_Unsigned_Only_Music_Competition/prweb15706776.htm",
+    "evidence": "Unsigned Only contest organizer's press release identifies Pokki DJ from Imperia, Italy, with Remember This Night. Artist's https://soundcloud.com/pokki-dj/energy and distributor https://music.amazon.com/artists/B00OY2OE8Y/pokki-dj connect exact pool track Energy to same catalogue.",
+    "verifiedAt": "2026-09-08",
+    "artistId": "428294",
+    "trackIds": [
+      "1129271",
+      "1179546"
+    ]
+  },
+  "Paul Lisak & After The Ice": {
+    "code": "GB",
+    "sourceUrl": "https://www.bandmix.co.uk/aftertheice-band/",
+    "evidence": "Band's self-written profile explicitly identifies Paul Lisak on vocals/guitar and says all permanent members live in Leytonstone, London. Matching Thursday Morning Waking album corroborated at https://thebugcast.org/2022/04/23/710-arty-pants/ and Commence at https://www.marcopeter.ch/2014/08/11/musiktipp-der-woche-332014/ . Region is band reference location, not the singer's French birthplace.",
+    "verifiedAt": "2026-09-08",
+    "artistId": "339123",
+    "trackIds": [
+      "157208",
+      "744852"
+    ]
+  },
+  "Moon & Sun": {
+    "code": "NL",
+    "sourceUrl": "https://moonandsun.bandcamp.com/track/salt-indigo",
+    "evidence": "Artist's Bandcamp page states Amsterdam, Netherlands and exact track Salt & Indigo from The Wild Things. This denotes project reference location; artist Monica Tormell has Swedish origin.",
+    "verifiedAt": "2026-09-08",
+    "artistId": "364536",
+    "trackIds": [
+      "682351"
+    ]
+  },
+  "Jesta": {
+    "code": "GB",
+    "sourceUrl": "https://jesta.bandcamp.com/album/previously",
+    "evidence": "Artist's Bandcamp describes Jesta as solo project of UK musician Bryan Page; release contains Back Chat matching the pool and credits Bryan Andrew Page and Harrison Hendrix Page.",
+    "verifiedAt": "2026-09-08",
+    "artistId": "362044",
+    "trackIds": [
+      "626918"
+    ]
+  },
+  "the saymory": {
+    "code": "UA",
+    "sourceUrl": "https://www.reverbnation.com/saymory",
+    "evidence": "Band's ReverbNation profile explicitly says Kharkov, UA and lists The Mirror Of You remix by Dr.synthetique, matching pool track. Uses this historical band's reference location; later solo Saymory relocated to Berlin.",
+    "verifiedAt": "2026-09-08",
+    "artistId": "351775",
+    "trackIds": [
+      "380962"
+    ]
+  },
+  "Przemek Puk": {
+    "trackIds": [
+      "675147"
+    ],
+    "artistId": "364191",
+    "evidence": "Official PUK MUSIC studio website gives Warszawa, Nowe Wlochy; its identity is linked by artist official https://linktr.ee/przemekpuk and label https://rollingstars.pl/biuro-prasowe/ . Original artist channel https://www.youtube.com/watch?v=nmUl2p8kGTU identifies exact Ocean Lez track; RMF radio chart corroborates the track https://www.rmf.fm/poplista%2C2025.html .",
+    "sourceUrl": "https://pukmusic.pl/",
+    "code": "PL",
+    "verifiedAt": "2026-09-08"
+  }
+}

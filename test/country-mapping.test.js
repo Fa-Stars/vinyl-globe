@@ -96,7 +96,7 @@ test('does not report legacy pool countries as authoritative for Jamendo songs',
     {
       id: '1307225',
       title: "This Ain't Love",
-      artist: 'Jyant',
+      artist: 'Unverified Fixture Artist',
       album: '',
       streamUrl: 'https://example.test/jyant.mp3',
       artwork: '',
@@ -107,7 +107,7 @@ test('does not report legacy pool countries as authoritative for Jamendo songs',
     {
       id: '1305161',
       title: 'Give U My Name',
-      artist: 'Jyant',
+      artist: 'Unverified Fixture Artist',
       album: '',
       streamUrl: 'https://example.test/jyant-2.mp3',
       artwork: '',
@@ -128,7 +128,7 @@ test('does not report legacy pool countries as authoritative for Jamendo songs',
     },
   ]));
   fs.writeFileSync(path.join(dataRoot, 'artist-countries.json'), JSON.stringify({
-    Jyant: {
+    'Unverified Fixture Artist': {
       code: 'CN',
       country: '中国',
       source: 'none',
@@ -145,7 +145,7 @@ test('does not report legacy pool countries as authoritative for Jamendo songs',
   }));
 
   const port = 32000 + (process.pid % 1000);
-  const child = spawn(process.execPath, ['web/server.js'], {
+  const child = spawn(process.execPath, ['--require', path.join(projectRoot, 'test-support/country-empty-preload.cjs'), 'web/server.js'], {
     cwd: projectRoot,
     env: {
       ...process.env,
