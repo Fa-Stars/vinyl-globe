@@ -63,17 +63,18 @@ test('iTunes keeps a cached country available during a failed refresh', { timeou
 test('a cold Jamendo startup can retry after the upstream recovers', async (t) => {
   let available = false;
   const backend = await startBackend(t, {
-    upstream(_req, res) {
+    upstream(req, res) {
       if (!available) { res.writeHead(404); res.end(); return; }
       res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({ headers: { status: 'success', results_fullcount:100 }, results: [{ id: 'fresh', name: 'Fresh Track', audio: 'http://127.0.0.1:1/fresh.mp3' }] }));
+      const id = new URL(req.url,'http://localhost').searchParams.get('id').split('+')[0];
+      res.end(JSON.stringify({ headers: { status: 'success' }, results: [{ id, name: 'Fresh Track', audio: 'http://127.0.0.1:1/fresh.mp3' }] }));
     },
   });
   await backend.waitForOutput(/pool fetch failed/);
   available = true;
   const response = await backend.request('/api/song');
   assert.equal(response.status, 200);
-  assert.equal((await response.json()).id, 'fresh');
+  assert.equal((await response.json()).title, 'Fresh Track');
 });
 
 test('empty random batches preserve an already cached playable track', async t => {

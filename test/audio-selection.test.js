@@ -168,7 +168,7 @@ test('does not queue a second warm download for an audio request already warming
   }
 });
 
-test('waits briefly for the first warm audio before returning a cold Jamendo track', async () => {
+test('returns a cold Jamendo track before the full warm download finishes', async () => {
   const upstream = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'audio/mpeg' });
     res.write('audio-start');
@@ -216,7 +216,7 @@ test('waits briefly for the first warm audio before returning a cold Jamendo tra
     const response = await fetch('http://127.0.0.1:' + port + '/api/song');
     const elapsed = Date.now() - startedAt;
     assert.equal(response.status, 200);
-    assert.ok(elapsed >= 700, 'returned before the warm audio was ready: ' + elapsed + 'ms');
+    assert.ok(elapsed < 700, 'metadata waited for the full download: ' + elapsed + 'ms');
   } finally {
     if (!exited) child.kill();
     await exitPromise;

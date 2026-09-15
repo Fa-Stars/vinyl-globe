@@ -50,6 +50,19 @@ function song(index) {
   return { id: String(index), title: 'Track ' + index, artist: '', artwork: '', duration: 180, streamUrl: '/audio/' + index, countrycode: 'US' };
 }
 
+test('switching tracks releases the old audio once, while pausing preserves it', async () => {
+  const player = await createPlayer();
+  const released = () => player.beacons.filter(url => url.startsWith('/api/audio/played'));
+  await player.click('btn-play');
+  await player.click('btn-play');
+  assert.equal(released().length, 0);
+  await player.click('btn-next');
+  assert.deepEqual(released(), ['/api/audio/played?id=1']);
+  await player.media('ended');
+  await player.tick(700);
+  assert.deepEqual(released(), ['/api/audio/played?id=1', '/api/audio/played?id=2']);
+});
+
 test('rapid skips abort the superseded request and ignore its late response', async () => {
   const pending = new Map();
   const player = await createPlayer({

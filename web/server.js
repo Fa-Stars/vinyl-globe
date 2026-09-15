@@ -64,11 +64,9 @@ const URL_MAP_FILE = path.join(AUDIO_DIR, '_urls.json'); // id -> 远程 URL 映
 const AUDIO_MAX = 60;    // 音频缓存文件数上限（约 60 × 4MB ≈ 240MB）
 const WARM_MAX = 3;      // 同时预下载的并发上限
 const WARM_TARGET = 4;  // 随时保持 4 首歌处于"已下载 / 下载中"，保证换歌流畅
-const WARM_READY_WAIT_MS = 5000; // 缓存刚启动时，最多等一首就绪再返回歌曲
 const COUNTRY_CACHE_TTL = 30 * 86400 * 1000;
 const COUNTRY_NONE_TTL = 86400 * 1000;
 const COUNTRY_PREFETCH_TARGET = 16; // 与音频预缓存同一批，提前准备国家/地区
-const COUNTRY_LOOKUP_WAIT_MS = 1400; // 当前歌曲优先解析，最多不阻塞换歌多久
 
 let shuttingDown = false;
 let cacheCleared = false;
@@ -239,7 +237,7 @@ let jamendoPool = []; // Jamendo 模式：全局歌曲池（完整 mp3）
 let urlMap = {};     // id -> {url, type}
 let warmQueue = [];  // 待预下载的 id 队列
 let warmActive = 0;
-const warmInFlight = new Set();
+const warmInFlight = new Map(); // id -> AbortController; release cancelled downloads promptly.
 const playedAudioIds = new Set();
 let warmReady = [];  // 已完整缓存的 id（可秒开，优先返回）
 
@@ -292,15 +290,6 @@ function audioCachePath(id) {
   return path.join(AUDIO_DIR, id + '.mp3');
 }
 
-// 预下载：把歌曲音频缓存到本地（并发受限，后台执行）
-function warmAudio(id) {
-  const entry = urlMap[id];
-  if (!entry || warmQueue.includes(id) || warmInFlight.has(id)) return;
-  if (fs.existsSync(audioCachePath(id))) return; // 已有缓存
-  warmQueue.push(id);
-  pumpWarm();
-}
-
 // 已缓存的歌被取走后，把它从"就绪"列表移除
 function consumeWarm(id) {
   const i = warmReady.indexOf(id);
@@ -310,6 +299,7 @@ function consumeWarm(id) {
 function clearPlayedAudio(id) {
   if (!/^[A-Za-z0-9_-]+$/.test(id)) return false;
   playedAudioIds.add(id);
+  warmInFlight.get(id)?.abort();
   warmReady = warmReady.filter((readyId) => readyId !== id);
   warmQueue = warmQueue.filter((queuedId) => queuedId !== id);
   let removed = false;
@@ -327,7 +317,7 @@ function clearPlayedAudio(id) {
 // 维持"始终有 WARM_TARGET 首歌在下载/已下载"的流水线
 function topUpWarm() {
   if (MODE !== 'jamendo') return;
-  if (jamendoPool.filter(s => !deliveredSongs.has(s.id)).length < 3 && Date.now() >= discoveryRetryAt) {
+  if (jamendoPool.filter(s => !deliveredSongs.has(s.id)).length < POOL_TARGET && Date.now() >= discoveryRetryAt) {
     ensureJamendoPool(true).catch(error => {
       discoveryRetryAt = Date.now() + 15000;
       console.warn('[songs] random discovery: ' + error.message);
@@ -339,6 +329,7 @@ function topUpWarm() {
     const candidates = jamendoPool.filter(
       (s) =>
         s.id &&
+        !playedAudioIds.has(s.id) &&
         !deliveredSongs.has(s.id) &&
         !warmReady.includes(s.id) &&
         !warmQueue.includes(s.id) &&
@@ -357,10 +348,11 @@ async function pumpWarm() {
   while (warmActive < WARM_MAX && warmQueue.length) {
     const id = warmQueue.shift();
     const entry = urlMap[id];
-    if (!entry) continue;
+    if (!entry || playedAudioIds.has(id)) continue;
+    const controller = new AbortController();
     warmActive++;
-    warmInFlight.add(id);
-    warmAudioTask(id, entry).finally(() => {
+    warmInFlight.set(id, controller);
+    warmAudioTask(id, entry, controller).finally(() => {
       warmInFlight.delete(id);
       warmActive--;
       pumpWarm();
@@ -368,21 +360,22 @@ async function pumpWarm() {
   }
 }
 
-async function warmAudioTask(id, entry) {
+async function warmAudioTask(id, entry, controller) {
   const tmp = audioCachePath(id) + '.tmp';
   const target = audioCachePath(id);
+  const timeout = setTimeout(() => controller.abort(), 120000);
   try {
     const res = await fetch(entry.url, {
       headers: { 'User-Agent': UA },
-      signal: AbortSignal.timeout(120000),
+      signal: controller.signal,
     });
     if (!res.ok || !res.body) {
       if (res.body) await res.body.cancel();
       return;
     }
     // pipeline 从写入开始就处理错误、背压和取消，磁盘失败不会变成未捕获异常。
-    await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(tmp));
-    if (playedAudioIds.has(id)) {
+    await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(tmp), { signal: controller.signal });
+    if (controller.signal.aborted || playedAudioIds.has(id)) {
       try { fs.unlinkSync(tmp); } catch (e) { /* ignore */ }
       return;
     }
@@ -396,6 +389,8 @@ async function warmAudioTask(id, entry) {
     console.log('[audio] cached ' + id + ' (' + (fs.statSync(target).size / 1024).toFixed(0) + 'KB, ready=' + warmReady.length + ')');
   } catch (e) {
     try { fs.unlinkSync(tmp); } catch (e2) { /* ignore */ }
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -479,8 +474,12 @@ async function serveAudio(req, res, id) {
     }
     return;
   }
-  // 未缓存：从远程转发（流式），同时触发后台预下载，下次播放秒开
-  if (req.method === 'GET') warmAudio(id);
+  // Prioritize the browser stream over downloading the same track a second time.
+  // Upcoming tracks still use the warm pipeline; current playback streams directly.
+  if (req.method === 'GET') {
+    warmQueue = warmQueue.filter(queuedId => queuedId !== id);
+    warmInFlight.get(id)?.abort();
+  }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 60000);
   const cancel = () => { if (!res.writableFinished) controller.abort(); };
@@ -605,20 +604,25 @@ async function fetchItunesCountry(code) {
 // tracks 接口不含地区；通过独立的 artists/locations 接口补充，
 // 在全目录随机位置抽样，候选用完即补充，不以热门程度或国家资料完整度排序。
 const POOL_TARGET = 6; // Only a small rotating look-ahead buffer.
-const discovery = createDiscovery({request: fetchDiscoveryPage});
+const DISCOVERY_BOUNDS_FILE = path.join(DATA_ROOT, 'catalog-bounds.json');
+let cachedBounds;
+try { cachedBounds = JSON.parse(fs.readFileSync(DISCOVERY_BOUNDS_FILE, 'utf8')); } catch { /* first startup */ }
+const discovery = createDiscovery({request: fetchDiscoveryPage, cachedBounds,
+  saveBounds: value => writeJsonAtomic(DISCOVERY_BOUNDS_FILE, value)});
 const deliveredSongs = new Set();
 let discoveryRetryAt = 0;
 let poolRequest = null;
+const poolWaiters = new Set();
 
 async function fetchDiscoveryPage(options) {
   const params = new URLSearchParams({
     client_id: JAMENDO_ID,
     format: 'json',
     limit: options.limit,
-    offset: options.offset,
-    order: 'id',
-    type: 'single albumtrack',
-    ...(options.fullcount ? {fullcount: options.fullcount} : {audioformat:'mp32'}),
+    ...(options.order ? {order: options.order} : {}),
+    ...(options.id ? {id: options.id} : {}),
+    type: 'single+albumtrack',
+    audioformat: 'mp32',
   });
   const url = 'https://api.jamendo.com/v3.0/tracks/?' + params.toString();
   let res;
@@ -662,16 +666,23 @@ function ensureJamendoPool(force = false) {
     return Promise.resolve(jamendoPool);
   }
   if (!poolRequest) poolRequest = fetchJamendoPool().finally(() => { poolRequest = null; });
-  return poolRequest;
+  if (force) return poolRequest;
+  let wake;
+  const available = new Promise(resolve => { wake = resolve; poolWaiters.add(wake); });
+  return Promise.race([poolRequest, available]).finally(() => poolWaiters.delete(wake));
 }
 
 async function fetchJamendoPool() {
   const waiting = jamendoPool.filter(s => !deliveredSongs.has(s.id));
   if (waiting.length >= POOL_TARGET) return waiting;
+  return discovery.sample(POOL_TARGET - waiting.length,
+    new Set([...deliveredSongs, ...jamendoPool.map(s => s.id)]), installJamendoTracks);
+}
+
+function installJamendoTracks(results) {
   const seen = new Set();
   const all = [];
   const freshUrls = {};
-  const results = await discovery.sample(Math.max(1, POOL_TARGET - jamendoPool.filter(s=>!deliveredSongs.has(s.id)).length), new Set([...deliveredSongs, ...jamendoPool.map(s=>s.id)]));
   for (const t of results) {
     if (!t.audio || seen.has(String(t.id))) continue;
     seen.add(String(t.id));
@@ -695,6 +706,7 @@ async function fetchJamendoPool() {
   prefetchCountryBatch(all);
   topUpWarm();
   prefetchUpcomingCountries();
+  for (const wake of poolWaiters) wake(jamendoPool);
   return all;
 }
 
@@ -723,14 +735,6 @@ function pickJamendoSong() {
   const s = candidates[randomIndex(candidates.length)];
   if (s) { playedAudioIds.delete(s.id); deliveredSongs.add(s.id); scheduleJamendoPoolSave(); }
   return s;
-}
-
-async function waitForWarmAudio() {
-  if (MODE !== 'jamendo' || warmReady.length || (!warmActive && !warmQueue.length)) return;
-  const deadline = Date.now() + WARM_READY_WAIT_MS;
-  while (!warmReady.length && (warmActive || warmQueue.length) && Date.now() < deadline) {
-    await sleep(100);
-  }
 }
 
 // 取某国歌曲：内存 → 磁盘 → 网络（惰性，瞬时失败自动重试一次）
@@ -800,7 +804,7 @@ function pickCountryCode() {
 async function pickSong(cancelled = () => false) {
   if (MODE === 'jamendo') {
     if (!jamendoPool.some(s => !deliveredSongs.has(s.id))) await ensureJamendoPool();
-    await waitForWarmAudio();
+    if (cancelled()) return null;
     return pickJamendoSong();
   }
   for (let tries = 0; tries < 12; tries++) {
@@ -982,8 +986,7 @@ function scheduleJamendoPoolSave() {
   poolSaveTimer = setTimeout(() => {
     poolSaveTimer = null;
     try {
-      fs.mkdirSync(SONGS_DIR, { recursive: true });
-      fs.writeFileSync(POOL_FILE, JSON.stringify(jamendoPool.filter(s => !deliveredSongs.has(s.id))));
+      writeJsonAtomic(POOL_FILE, jamendoPool.filter(s => !deliveredSongs.has(s.id)));
     } catch (e) { /* ignore */ }
   }, 250);
 }
@@ -1235,57 +1238,77 @@ function resolveArtistCountry(name) {
         return res.json();
       },
     });
-    const lookup = jamendo.code ? jamendo : await mbLookup(key);
-    // 暂时无法访问资料源：不落盘、不清除旧的可信标注，让后续轮询或下次播放重试。
-    if (!lookup.definitive || (!lookup.code && !jamendo.definitive)) return null;
-    const code = lookup.code;
-    const source = lookup.source || 'mb';
-    const rec = {
-      code: code || null,
-      country: code ? (COUNTRY_NAMES[code] || code) : null,
-      source: code ? source : 'none',
-      artistId: artistIds.length === 1 ? artistIds[0] : '',
-      sourceUrl: lookup.sourceUrl || (code ? 'https://musicbrainz.org/search?type=artist&query=' + encodeURIComponent(key) : ''),
-      resolverVersion: COUNTRY_RESOLVER_VERSION,
-      ts: Date.now(),
-    };
-    artistCountry[key] = rec;
-    saveArtistCountries();
-    annotatePoolCountry(key, rec);
-    return code ? rec : null;
+    return finishArtistCountry(key, artistIds, jamendo);
   })().finally(() => { delete inflightCountry[key]; });
   inflightCountry[key] = p;
   return p;
 }
 
+async function finishArtistCountry(key, artistIds, jamendo) {
+  const lookup = jamendo.code ? jamendo : await mbLookup(key);
+  // 暂时无法访问资料源：不落盘、不清除旧的可信标注，让后续轮询或下次播放重试。
+  if (!lookup.definitive || (!lookup.code && !jamendo.definitive)) return null;
+  const code = lookup.code;
+  const source = lookup.source || 'mb';
+  const rec = {
+    code: code || null,
+    country: code ? (COUNTRY_NAMES[code] || code) : null,
+    source: code ? source : 'none',
+    artistId: artistIds.length === 1 ? artistIds[0] : '',
+    sourceUrl: lookup.sourceUrl || (code ? 'https://musicbrainz.org/search?type=artist&query=' + encodeURIComponent(key) : ''),
+    resolverVersion: COUNTRY_RESOLVER_VERSION,
+    ts: Date.now(),
+  };
+  artistCountry[key] = rec;
+  saveArtistCountries();
+  annotatePoolCountry(key, rec);
+  return code ? rec : null;
+}
+
+let pendingCountryBatch = null;
 function prefetchCountryBatch(songs) {
-  const pending = songs.filter(s => s.artistId && !countryRecordForSong(s) && !inflightCountry[normalizeArtistName(s.artist)]);
+  const pending = songs.filter(s => s.artistId && !countryRecordForSong(s) &&
+    !isFreshCountryRecord(cachedArtistCountry(s.artist)) && !inflightCountry[normalizeArtistName(s.artist)]);
   if (!pending.length) return;
-  const ids = [...new Set(pending.map(s => s.artistId))];
-  const batch = (async () => {
-    const params = new URLSearchParams({client_id:JAMENDO_ID,format:'json',limit:'200',id:ids.join(' ')});
-    const res = await fetch('https://api.jamendo.com/v3.0/artists/locations/?' + params, {
-      headers:{'User-Agent':UA}, signal:AbortSignal.timeout(REQ_TIMEOUT),
-    });
-    if (!res.ok) return [];
-    const result = await res.json();
-    return result.headers && result.headers.status === 'success' ? result.results || [] : [];
-  })().catch(() => []);
+  // Briefly coalesce nearby discoveries, registering inflight tasks immediately
+  // so the current track and background queue join the same location request.
+  if (!pendingCountryBatch) {
+    const batch = { ids: new Set(), resolve: null, promise: null };
+    batch.promise = new Promise(resolve => { batch.resolve = resolve; });
+    pendingCountryBatch = batch;
+    setTimeout(async () => {
+      pendingCountryBatch = null;
+      if (!batch.ids.size) { batch.resolve({ artists: [], definitive: true }); return; }
+      let result = { artists: [], definitive: false };
+      try {
+        const params = new URLSearchParams({client_id:JAMENDO_ID,format:'json',limit:'200',id:[...batch.ids].join('+')});
+        const res = await fetch('https://api.jamendo.com/v3.0/artists/locations/?' + params, {
+          headers:{'User-Agent':UA}, signal:AbortSignal.timeout(REQ_TIMEOUT),
+        });
+        if (res.ok) {
+          const body = await res.json();
+          if (body.headers?.status === 'success' && Array.isArray(body.results)) {
+            result = { artists: body.results, definitive: true };
+          }
+        } else if (res.body) await res.body.cancel();
+      } catch { /* A failed batch must remain retryable. */ }
+      batch.resolve(result);
+    }, 40);
+  }
+  const batch = pendingCountryBatch;
   for (const song of pending) {
     const key = normalizeArtistName(song.artist);
+    if (!key || inflightCountry[key]) continue;
     const namesakes = new Set(jamendoPool.filter(s => normalizeArtistName(s.artist) === key).map(s => s.artistId).filter(Boolean));
-    const task = batch.then(artists => {
+    if (namesakes.size !== 1) continue;
+    batch.ids.add(song.artistId);
+    const task = batch.promise.then(({artists, definitive}) => {
       const location = selectLocation(artists, key, song.artistId, COUNTRY_NAMES);
-      if (!location) return null; // Missing metadata can still use MusicBrainz.
-      const rec = {...location,country:COUNTRY_NAMES[location.code],resolverVersion:COUNTRY_RESOLVER_VERSION,ts:Date.now()};
-      artistCountry[key] = rec;
-      annotatePoolCountry(key,rec);
-      saveArtistCountries();
-      return rec;
+      // Reuse the authoritative empty result when falling back to MusicBrainz;
+      // repeating artists/locations only adds latency and consumes an API request.
+      return finishArtistCountry(key, [song.artistId], { ...(location || { code: null }), definitive });
     }).catch(() => null);
-    if (namesakes.size === 1) {
-      inflightCountry[key] = task.finally(() => { delete inflightCountry[key]; });
-    }
+    inflightCountry[key] = task.finally(() => { delete inflightCountry[key]; });
   }
 }
 
@@ -1321,7 +1344,9 @@ function prefetchUpcomingCountries() {
   }
   const remaining = jamendoPool.filter((song) => !used.has(song.id) && !deliveredSongs.has(song.id));
   shuffle(remaining);
-  for (const song of preferred.concat(remaining.slice(0, COUNTRY_PREFETCH_TARGET))) {
+  const upcoming = preferred.concat(remaining.slice(0, COUNTRY_PREFETCH_TARGET));
+  prefetchCountryBatch(upcoming);
+  for (const song of upcoming) {
     queueCountryArtist(song.artist, true);
   }
 }
@@ -1440,15 +1465,12 @@ function handleApi(req, res, pathname, urlObj) {
         consumeWarm(s.id); // 这首歌被取走，从就绪列表移除
         topUpWarm();       // 立刻补一首新的进预下载流水线
       }
-      // 国家信息：当前歌曲拥有最高优先级。解析与音频预缓存并行进行，
-      // 只给当前 API 请求留一小段时间拿到结果，超时则让前端继续轮询。
+      // Country lookup never delays playable song metadata. Return any result
+      // already prefetched; /api/country delivers the remaining work independently.
       if (MODE === 'jamendo' && s.artist) {
         let rec = countryRecordForSong(s);
         if (!rec) {
-          rec = await Promise.race([
-            resolveArtistCountry(s.artist),
-            sleep(COUNTRY_LOOKUP_WAIT_MS).then(() => null),
-          ]);
+          resolveArtistCountry(s.artist).catch(() => {});
         }
         if (rec) {
           out.countrycode = rec.code;

@@ -3,36 +3,65 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {createDiscovery} = require('../web/random-discovery');
-const {startBackend} = require('../test-support/backend.cjs');
+const { createDiscovery } = require('../web/random-discovery');
+const { startBackend } = require('../test-support/backend.cjs');
+const bounds = maxId => ({ maxId, checkedAt: Date.now() });
 
-test('random discovery samples distant catalog positions and includes singles', async () => {
-  const calls=[];
-  const values=[0.01,0.5,0.99];
-  const discovery=createDiscovery({random:()=>values.shift() || 0,request:async params=>{
-    calls.push(params);
-    return {headers:{results_fullcount:800000},results:[{id:params.offset,audio:'audio'}]};
+function randomSequence(values) { let i = 0; return () => values[i++ % values.length]; }
+
+test('random discovery samples distant exact IDs without deep pagination or API sort bias', async () => {
+  const calls = [];
+  const d = createDiscovery({ cachedBounds: bounds(1000), random: randomSequence([0.99, 0.01, 0.5]), request: async p => {
+    calls.push(p);
+    return { results: p.id.split('+').sort((a,b) => Number(a)-Number(b)).map(id => ({ id, audio: 'url' })) };
   }});
-  const result=await discovery.sample(3);
-  assert.deepEqual(result.map(t=>t.id),['8000','400000','792000']);
-  assert.equal(calls.filter(p=>p.fullcount).length,1);
+  assert.deepEqual((await d.sample(3)).map(t => t.id), ['991','11','501']);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].offset, undefined);
+  assert.equal(calls[0].fullcount, undefined);
 });
 
-test('random discovery rejects played IDs and tolerates an individual failed request', async () => {
-  let n=0;
-  const d=createDiscovery({random:()=> (++n)/100,request:async p=>{
-    if(p.fullcount)return {headers:{results_fullcount:100}};
-    if(p.offset==='2')throw new Error('temporary failure');
-    return {results:[{id:p.offset,audio:'url'}]};
+test('ID holes, unrequested results, duplicates and played IDs never become nearby replacements', async () => {
+  const d = createDiscovery({ cachedBounds: bounds(100), random: randomSequence([0,0.01,0.02,0.03,0.04]), request: async p => {
+    assert.ok(!p.id.split('+').includes('1'));
+    return { results: [{id:'2',audio:''},{id:'3',audio:'url'},{id:'3',audio:'url'}, {id:'99',audio:'unrequested'}, {id:'5',audio:'url'}] };
   }});
-  const result=await d.sample(2,new Set(['1']));
-  assert.equal(result.length,2);
-  assert.ok(result.every(t=>!['1','2'].includes(t.id)));
+  assert.deepEqual((await d.sample(2,new Set(['1']))).map(t => t.id), ['3','5']);
 });
 
-test('missing catalog totals do not silently turn into a small fixed chart', async () => {
-  const d=createDiscovery({request:async()=>({results:[{id:'1',audio:'url'}]})});
-  await assert.rejects(d.sample(2),/Catalog size unavailable/);
+test('a failed exact-ID batch is retryable without marking those IDs played', async () => {
+  let calls = 0;
+  const d = createDiscovery({ cachedBounds: bounds(1), random: () => 0, request: async p => {
+    if (++calls === 1) throw new Error('temporary');
+    return { results: [{ id:p.id, audio:'url' }] };
+  }});
+  assert.equal((await d.sample(1))[0].id,'1');
+  assert.equal(calls,2);
+});
+
+test('missing catalog boundaries never silently become a fixed chart', async () => {
+  const d = createDiscovery({ request: async () => ({ results: [] }) });
+  await assert.rejects(d.sample(2), /Catalog ID range unavailable/);
+});
+
+test('cached boundaries serve songs while a single background refresh discovers a newer range', async () => {
+  let release;
+  let lookups = 0;
+  let saved;
+  let clock = 86400000;
+  const d = createDiscovery({ now: () => clock, cachedBounds: {maxId:100,checkedAt:clock-7*3600000},
+    random: () => 0.99, saveBounds: value => { saved=value; }, request: async p => {
+      if (p.order) { lookups++; return new Promise(resolve => { release=resolve; }); }
+      return { results: [{id:p.id, audio:'url'}] };
+    },
+  });
+  assert.equal((await d.sample(1))[0].id,'100');
+  assert.equal((await d.sample(1))[0].id,'100');
+  assert.equal(lookups,1);
+  release({results:[{id:'200'}]});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(saved.maxId,200);
+  assert.equal((await d.sample(1))[0].id,'199');
 });
 
 test('playback continuously replenishes remote candidates, never chooses based on known country', async t => {
@@ -44,16 +73,15 @@ test('playback continuously replenishes remote candidates, never chooses based o
     const route=u.searchParams.get('path');
     if(route==='/v3.0/artists/locations/'){
       batches++;
-      const ids=(u.searchParams.get('id')||'').split(' ');
+      const ids=(u.searchParams.get('id')||'').split(/[ +]/);
       res.end(JSON.stringify({headers:{status:'success'},results:ids.map(id=>({id,name:'Artist '+id,locations:[{country:'JPN'}]}))}));
       return;
     }
-    assert.equal(u.searchParams.get('order'),'id');
-    assert.equal(u.searchParams.get('type'),'single albumtrack');
-    if(u.searchParams.get('fullcount')){res.end(JSON.stringify({headers:{status:'success',results_fullcount:800000},results:[]}));return;}
+    assert.equal(u.searchParams.get('offset'),'0'); // Test proxy default; real request has no deep offset.
+    assert.equal(u.searchParams.get('type'),'single+albumtrack');
     calls++;
-    const id=String(calls);
-    res.end(JSON.stringify({headers:{status:'success'},results:[{id,name:'Track '+id,artist_id:id,artist_name:'Artist '+id,audio:'http://127.0.0.1:1/audio'}]}));
+    const ids=u.searchParams.get('id').split('+');
+    res.end(JSON.stringify({headers:{status:'success'},results:ids.map(id=>({id,name:'Track '+id,artist_id:id,artist_name:'Artist '+id,audio:'http://127.0.0.1:1/audio'}))}));
   }});
   await backend.waitForOutput(/new random tracks/);
   for(let i=0;i<15;i++){
@@ -64,11 +92,9 @@ test('playback continuously replenishes remote candidates, never chooses based o
     tracks.add(song.id);
   }
   assert.equal(tracks.size,15);
-  assert.ok(calls>6,'remote discovery must continue beyond initial buffer');
-  assert.ok(batches>0,'locations should be fetched as a batch');
-  // Allow the debounced disk write to finish; a restart must only restore
-  // upcoming songs, not turn already played history into another playlist.
+  assert.ok(calls>=3,'remote discovery must continue beyond initial buffer');
   await new Promise(resolve=>setTimeout(resolve,300));
+  assert.ok(batches>0,'locations should be fetched as a batch');
   const saved=JSON.parse(fs.readFileSync(path.join(backend.root,'jamendo/pool.json')));
   assert.ok(saved.length<=6,'look-ahead buffer is bounded');
   assert.ok(saved.every(song=>!tracks.has(song.id)),'played songs must leave the saved buffer');

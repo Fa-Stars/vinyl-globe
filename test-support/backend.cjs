@@ -8,7 +8,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
 
-async function startBackend(t, { mode = 'jamendo', pool = [], charts = {}, audio = {}, upstream, setup } = {}) {
+async function startBackend(t, { mode = 'jamendo', pool = [], charts = {}, audio = {}, upstream, setup, catalogMaxId = 800000 } = {}) {
   const temp = fs.realpathSync(os.tmpdir());
   const root = fs.mkdtempSync(path.join(temp, 'vinyl-regression-'));
   const write = (name, content) => {
@@ -17,6 +17,7 @@ async function startBackend(t, { mode = 'jamendo', pool = [], charts = {}, audio
     fs.writeFileSync(file, typeof content === 'string' ? content : JSON.stringify(content));
   };
   if (pool.length) write('jamendo/pool.json', pool);
+  if (catalogMaxId) write('catalog-bounds.json', { maxId: catalogMaxId, checkedAt: Date.now() });
   for (const [code, songs] of Object.entries(charts)) write('songs/' + code + '.json', songs);
   for (const [id, bytes] of Object.entries(audio)) write('audio/' + id + '.mp3', bytes);
   if (setup) setup(root);
@@ -76,6 +77,7 @@ async function startBackend(t, { mode = 'jamendo', pool = [], charts = {}, audio
   });
   return {
     root,
+    port,
     child,
     get output() { return output; },
     waitForRefresh: () => refreshDone,

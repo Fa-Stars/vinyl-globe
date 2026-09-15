@@ -6,10 +6,12 @@ const vm = require('node:vm');
 
 async function flush() { for (let i = 0; i < 30; i++) await Promise.resolve(); }
 
-async function createPlayer({ songResponse, demo = false, playError, infoResponse } = {}) {
+async function createPlayer({ songResponse, demo = false, playError, infoResponse, mapData } = {}) {
   let now = 0;
   let timerId = 0;
   const timers = new Map();
+  let animationFrame;
+  let renderedFrames = 0;
   const schedule = (callback, ms, interval = false) => {
     const id = ++timerId;
     timers.set(id, { callback, at: now + ms, interval: interval ? ms : 0 });
@@ -33,7 +35,12 @@ async function createPlayer({ songResponse, demo = false, playError, infoRespons
     focus() {}
     matches() { return false; }
     closest() { return null; }
-    getContext() { return { createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }) }; }
+    getContext() {
+      return {
+        createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }),
+        putImageData() { renderedFrames++; },
+      };
+    }
     emit(type) { this.dispatchEvent(new Event(type)); }
   }
   class Audio extends Element {
@@ -60,12 +67,13 @@ async function createPlayer({ songResponse, demo = false, playError, infoRespons
     return elements.get(id);
   };
   const window = new Element();
-  const navigator = { onLine: true, sendBeacon: () => true };
+  const beacons = [];
+  const navigator = { onLine: true, sendBeacon: (url) => { beacons.push(url); return true; } };
   let songsRequested = 0;
   const requests = [];
   const response = (data) => ({ ok: true, json: async () => data });
   const fetch = async (url, options = {}) => {
-    if (url === 'map.json') return response({ w: 1, h: 1, grid: '..', names: {}, aliases: {} });
+    if (url === 'map.json') return response(mapData || { w: 1, h: 1, grid: '..', names: {}, aliases: {} });
     if (url === 'capitals.json') return response({});
     if (url === '/api/info') return infoResponse ? infoResponse(response) : response({ mode: 'itunes' });
     if (url === '/api/song') {
@@ -76,18 +84,25 @@ async function createPlayer({ songResponse, demo = false, playError, infoRespons
     }
     return response({});
   };
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../web/public/app.js'), 'utf8'), {
+  const context = vm.createContext({
     document: { getElementById: element, querySelector: element, activeElement: null },
     window, navigator, location: { search: demo ? '?demo=1' : '' },
     console, fetch, URLSearchParams, AbortController,
     Date: class extends Date { static now() { return now; } },
     setTimeout: (fn, ms) => schedule(fn, ms), clearTimeout: (id) => timers.delete(id),
     setInterval: (fn, ms) => schedule(fn, ms, true), clearInterval: (id) => timers.delete(id),
-    requestAnimationFrame() {},
-  }, { filename: 'app.js' });
+    requestAnimationFrame(callback) { animationFrame = callback; },
+  });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../web/public/app.js'), 'utf8'), context, { filename: 'app.js' });
   await flush();
   return {
-    element, audio: element('audio'), requests,
+    element, audio: element('audio'), requests, beacons,
+    frame(timestamp, hidden = false) {
+      context.document.hidden = hidden;
+      animationFrame(timestamp);
+    },
+    get renderedFrames() { return renderedFrames; },
+    get globeRotation() { return vm.runInContext('rot', context); },
     get title() { return element('np-station').textContent; },
     get status() { return element('np-status').textContent; },
     async click(id) { element(id).emit('click'); await flush(); },

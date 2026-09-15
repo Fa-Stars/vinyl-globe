@@ -66,8 +66,8 @@ let sourceMode = 'itunes';
 let settingsReturnFocus = null;
 
 // 歌曲接口挂起时及时释放播放控制，避免实体按钮/网页长期停在切换状态。
-// 后端外部请求有自己的 12 秒超时，20 秒给有限的预缓存等待留出余量。
-const SONG_REQUEST_TIMEOUT_MS = 20000;
+// 首次初始化在线编号范围可能较慢；后续切歌无需等待整首音频或地区解析。
+const SONG_REQUEST_TIMEOUT_MS = 45000;
 
 // 地图呈现归属：保留原始网格编码，但在界面上作为同一显示区域处理。
 const DISPLAY_CODE_ALIASES = { TW: 'CN' };
@@ -380,15 +380,22 @@ audio.addEventListener('timeupdate', () => {
 audio.addEventListener('loadedmetadata', () => {
   if (isFinite(audio.duration) && audio.duration > 0) npDuration.textContent = fmtClock(audio.duration);
 });
-audio.addEventListener('ended', () => {
-  if (!started || !current) return;
-  const playedId = current.id;
+let releasedAudioSong = null;
+function releaseSongAudio(song) {
+  if (!song || releasedAudioSong === song) return;
+  releasedAudioSong = song;
+  const playedId = song.id;
   if (playedId) {
     const url = '/api/audio/played?id=' + encodeURIComponent(String(playedId));
     if (!navigator.sendBeacon || !navigator.sendBeacon(url)) {
       fetch(url, { method: 'POST', keepalive: true, cache: 'no-store' }).catch(() => {});
     }
   }
+}
+
+audio.addEventListener('ended', () => {
+  if (!started || !current) return;
+  releaseSongAudio(current);
   clearPlaybackTimers();
   setPlaybackState('ended', '歌曲结束，自动播放下一首…');
   autoTimer = setTimeout(() => { autoTimer = null; next('ended'); }, 700);
@@ -576,6 +583,7 @@ function setCountry(code, displayName) {
 
 function setSong(s) {
   invalidateCountryPoll();
+  const previous = current;
   current = s;
   trackNumber = (trackNumber % 99) + 1;
   npIndex.textContent = String(trackNumber).padStart(2, '0');
@@ -615,6 +623,9 @@ function setSong(s) {
 
   audio.src = s.streamUrl;
   audio.load();
+  // The replacement is ready and the browser has detached the previous source.
+  // Preserve the current cache when pausing or when fetching a replacement fails.
+  if (previous && previous.id !== s.id) releaseSongAudio(previous);
   if (started) requestPlayback();
   else setPlaybackState('ready', '已准备 · 点击唱片开始播放');
 }
@@ -961,25 +972,42 @@ function drawGlobe(now) {
   gctx.putImageData(frameImg, 0, 0);
 }
 
-function updateGlobe() {
+function updateGlobe(elapsedMs = 1000 / 60) {
+  // Preserve the original 60Hz motion while allowing a lower drawing rate.
+  const frames = elapsedMs / (1000 / 60);
   if (targetRot !== null) {
     // 偏航（最短弧） + 俯仰 + 缩放 平滑趋近
     const delta = ((targetRot - rot + 540) % 360) - 180;
     if (Math.abs(delta) < 0.18) rot = targetRot;
-    else rot += delta * 0.048;
-    pitch += (targetPitch - pitch) * 0.042;
-    zoom += (targetZoom - zoom) * 0.042;
+    else rot += delta * (1 - Math.pow(1 - 0.048, frames));
+    const easing = 1 - Math.pow(1 - 0.042, frames);
+    pitch += (targetPitch - pitch) * easing;
+    zoom += (targetZoom - zoom) * easing;
   } else {
-    rot = (rot + 0.06 + 360) % 360;       // 空闲缓慢自转
-    pitch += (0 - pitch) * 0.03;          // 回正
-    zoom += (1 - zoom) * 0.03;            // 还原
+    rot = (rot + 0.06 * frames + 360) % 360;
+    const easing = 1 - Math.pow(1 - 0.03, frames);
+    pitch += (0 - pitch) * easing;
+    zoom += (1 - zoom) * easing;
   }
 }
 
+const GLOBE_FRAME_MS = 1000 / 30;
+let lastGlobeUpdate = null;
+let nextGlobeFrame = 0;
 function globeLoop(t) {
-  updateGlobe();
-  drawGlobe(t);
   requestAnimationFrame(globeLoop);
+  if (document.hidden) {
+    lastGlobeUpdate = null;
+    return;
+  }
+  if (lastGlobeUpdate === null) nextGlobeFrame = t;
+  if (t + 0.01 < nextGlobeFrame) return;
+  // Keep the schedule aligned across 60/120/144Hz screens without accumulating drift.
+  nextGlobeFrame += (Math.floor((t - nextGlobeFrame + 0.01) / GLOBE_FRAME_MS) + 1) * GLOBE_FRAME_MS;
+  const elapsed = lastGlobeUpdate === null ? 0 : Math.min(100, t - lastGlobeUpdate);
+  lastGlobeUpdate = t;
+  updateGlobe(elapsed);
+  drawGlobe(t);
 }
 
 /* ---------------- 交互 ---------------- */

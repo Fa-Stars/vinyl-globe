@@ -26,7 +26,7 @@ node web/server.js     # 或 Windows 下双击 web/start.bat
 | **地球配色**（星露谷风格） | `web/public/app.js` | `PAL` 常量（天空/海/陆地/高亮/旗子颜色） |
 | **地球分辨率/画布大小** | `web/public/app.js` | `GW/GH/GCX/GCY/GR` 常量 |
 | **缩放逻辑**（国家占画面比例） | `web/public/app.js` | `ZOOM_FILL`、`ZOOM_MAX`、`countryZoom()` |
-| **旋转速度/缓动** | `web/public/app.js` | `updateGlobe()`（0.05 / 0.03 系数） |
+| **旋转速度/缓动与帧率** | `web/public/app.js` | `updateGlobe(elapsedMs)` 按时间更新；`GLOBE_FRAME_MS` 控制绘制间隔 |
 | **旋转到国家（俯仰/偏航）** | `web/public/app.js` | `setCountry()`、`countryScreenPos()` |
 | **首都像素旗标记样式** | `web/public/app.js` | `drawGlobe()` 末尾的旗子绘制段 |
 | **背景**（渐变天空/柔光/星星） | `web/public/app.js` | `buildBackdrop()` |
@@ -58,10 +58,10 @@ node web/server.js     # 或 Windows 下双击 web/start.bat
 | 端点 | 说明 |
 | --- | --- |
 | `GET /api/song` | 随机一首歌 `{title, artist, album, streamUrl, artwork, duration, countrycode, country, id}` |
-| `GET /api/country?id=…` | 解析该歌艺术家的国籍（MusicBrainz，结果缓存 30 天；无法确认时返回未知） |
+| `GET /api/country?id=…` | 艺人地区：核实资料 → Jamendo 批量查询 → MusicBrainz；可信结果缓存 30 天，确认无资料缓存 1 天 |
 | `GET /api/info` | 模式与统计 |
-| `GET /audio/{id}` | 本地音频（缓存命中秒开，未命中转发 Jamendo 并后台缓存） |
-| `POST /api/audio/played?id=…` | 播放结束后删除该歌曲的本地音频缓存，保留歌曲池和远程 URL 元数据 |
+| `GET /audio/{id}` | 本地缓存或 Jamendo 流式转发；转发时取消同一首的重复预下载，后台继续预取后续歌曲 |
+| `POST /api/audio/played?id=…` | 播完或切走后取消该歌曲的预下载并删除本地音频缓存，保留远程 URL 元数据 |
 | `POST /api/client-session` | Web 页面会话心跳；最后一个页面关闭后触发后端退出和缓存清理（仅直接 Web 模式） |
 
 ## 本地改动的验证方法
