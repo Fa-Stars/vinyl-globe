@@ -1,6 +1,6 @@
 {
   "name": "world-vinyl",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "世界唱片机 · World Vinyl desktop player",
   "author": "World Vinyl",
   "main": "desktop/electron/main.js",
