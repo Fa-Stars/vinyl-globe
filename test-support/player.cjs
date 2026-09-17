@@ -6,7 +6,7 @@ const vm = require('node:vm');
 
 async function flush() { for (let i = 0; i < 30; i++) await Promise.resolve(); }
 
-async function createPlayer({ songResponse, demo = false, playError, infoResponse, mapData } = {}) {
+async function createPlayer({ songResponse, demo = false, playError, infoResponse, mapData, electronAPI } = {}) {
   let now = 0;
   let timerId = 0;
   const timers = new Map();
@@ -22,6 +22,11 @@ async function createPlayer({ songResponse, demo = false, playError, infoRespons
       super();
       this.textContent = '';
       this.dataset = {};
+      this.hidden = false;
+      this.disabled = false;
+      this.href = '';
+      this.value = '';
+      this.type = 'text';
       this.style = { setProperty() {} };
       this.attributes = new Map();
       const classes = new Set();
@@ -31,7 +36,19 @@ async function createPlayer({ songResponse, demo = false, playError, infoRespons
         contains: (name) => classes.has(name),
       };
     }
-    setAttribute(name, value) { this.attributes.set(name, value); }
+    setAttribute(name, value) {
+      this.attributes.set(name, String(value));
+      if (name === 'href') this.href = String(value);
+      else if (name === 'hidden') this.hidden = true;
+      else if (name === 'disabled') this.disabled = true;
+    }
+    getAttribute(name) { return this.attributes.get(name) ?? null; }
+    removeAttribute(name) {
+      this.attributes.delete(name);
+      if (name === 'href') this.href = '';
+      else if (name === 'hidden') this.hidden = false;
+      else if (name === 'disabled') this.disabled = false;
+    }
     focus() {}
     matches() { return false; }
     closest() { return null; }
@@ -71,23 +88,39 @@ async function createPlayer({ songResponse, demo = false, playError, infoRespons
   const navigator = { onLine: true, sendBeacon: (url) => { beacons.push(url); return true; } };
   let songsRequested = 0;
   const requests = [];
-  const response = (data) => ({ ok: true, json: async () => data });
+  const response = (data, status = 200) => ({
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => data,
+  });
   const fetch = async (url, options = {}) => {
     if (url === 'map.json') return response(mapData || { w: 1, h: 1, grid: '..', names: {}, aliases: {} });
     if (url === 'capitals.json') return response({});
-    if (url === '/api/info') return infoResponse ? infoResponse(response) : response({ mode: 'itunes' });
+    if (url === '/api/info') return infoResponse ? infoResponse(response) : response({ mode: 'jamendo', configured: true });
     if (url === '/api/song') {
       const index = ++songsRequested;
-      requests.push({ index, signal: options.signal });
+      requests.push({ index, signal: options.signal, url });
       if (songResponse) return songResponse(index, options.signal, response);
-      return response({ id: String(index), title: 'Track ' + index, artist: 'Artist', artwork: '', duration: 180, streamUrl: '/audio/' + index, countrycode: 'US', country: '美国' });
+      return response({
+        id: String(index), title: 'Track ' + index, artist: 'Artist', artwork: '', duration: 180,
+        streamUrl: '/audio/' + index, sourceUrl: 'https://www.jamendo.com/track/' + index,
+        license: { name: 'CC BY-NC-SA 3.0', url: 'https://creativecommons.org/licenses/by-nc-sa/3.0/' },
+        countrycode: 'US', country: '美国',
+      });
     }
     return response({});
   };
+  class Image extends Element {
+    set src(value) { this._src = String(value); }
+    get src() { return this._src || ''; }
+  }
+  window.electronAPI = electronAPI;
+  const location = { search: demo ? '?demo=1' : '', reload() {} };
   const context = vm.createContext({
     document: { getElementById: element, querySelector: element, activeElement: null },
-    window, navigator, location: { search: demo ? '?demo=1' : '' },
-    console, fetch, URLSearchParams, AbortController,
+    window, navigator, location,
+    Image,
+    console, fetch, URL, URLSearchParams, AbortController,
     Date: class extends Date { static now() { return now; } },
     setTimeout: (fn, ms) => schedule(fn, ms), clearTimeout: (id) => timers.delete(id),
     setInterval: (fn, ms) => schedule(fn, ms, true), clearInterval: (id) => timers.delete(id),
@@ -97,6 +130,8 @@ async function createPlayer({ songResponse, demo = false, playError, infoRespons
   await flush();
   return {
     element, audio: element('audio'), requests, beacons,
+    get songsRequested() { return songsRequested; },
+    get playbackMode() { return element('np-mode').textContent; },
     frame(timestamp, hidden = false) {
       context.document.hidden = hidden;
       animationFrame(timestamp);

@@ -4,10 +4,22 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { createDiscovery } = require('../web/random-discovery');
+const { normalizeJamendoTrack } = require('../web/jamendo-metadata');
 const { startBackend } = require('../test-support/backend.cjs');
 const bounds = maxId => ({ maxId, checkedAt: Date.now() });
 
 function randomSequence(values) { let i = 0; return () => values[i++ % values.length]; }
+
+test('unlicensed results do not consume discovery slots before valid licensed tracks', async () => {
+  const d = createDiscovery({ cachedBounds: bounds(4), random: randomSequence([0, 0.25, 0.5, 0.75]),
+    acceptTrack: normalizeJamendoTrack,
+    request: async p => ({ results: p.id.split('+').map(id => ({ id, audio: 'https://example.test/audio',
+      license_ccurl: Number(id) % 2 === 0 ? 'https://creativecommons.org/licenses/by/4.0/' : '' })) }),
+  });
+  const tracks = await d.sample(2);
+  assert.deepEqual(tracks.map(track => track.id), ['2', '4']);
+  assert.ok(tracks.every(track => track.license.name === 'CC BY 4.0'));
+});
 
 test('random discovery samples distant exact IDs without deep pagination or API sort bias', async () => {
   const calls = [];
@@ -81,7 +93,7 @@ test('playback continuously replenishes remote candidates, never chooses based o
     assert.equal(u.searchParams.get('type'),'single+albumtrack');
     calls++;
     const ids=u.searchParams.get('id').split('+');
-    res.end(JSON.stringify({headers:{status:'success'},results:ids.map(id=>({id,name:'Track '+id,artist_id:id,artist_name:'Artist '+id,audio:'http://127.0.0.1:1/audio'}))}));
+    res.end(JSON.stringify({headers:{status:'success'},results:ids.map(id=>({id,name:'Track '+id,artist_id:id,artist_name:'Artist '+id,audio:'http://127.0.0.1:1/audio',license_ccurl:'https://creativecommons.org/licenses/by-nc-sa/3.0/'}))}));
   }});
   await backend.waitForOutput(/new random tracks/);
   for(let i=0;i<15;i++){
@@ -95,7 +107,8 @@ test('playback continuously replenishes remote candidates, never chooses based o
   assert.ok(calls>=3,'remote discovery must continue beyond initial buffer');
   await new Promise(resolve=>setTimeout(resolve,300));
   assert.ok(batches>0,'locations should be fetched as a batch');
-  const saved=JSON.parse(fs.readFileSync(path.join(backend.root,'jamendo/pool.json')));
-  assert.ok(saved.length<=6,'look-ahead buffer is bounded');
-  assert.ok(saved.every(song=>!tracks.has(song.id)),'played songs must leave the saved buffer');
+  const info=await (await backend.request('/api/info')).json();
+  assert.ok(info.songs<=22,'at most 16 historical entries and 6 pending candidates');
+  assert.equal(fs.existsSync(path.join(backend.root,'jamendo/pool.json')),false,'no persistent song pool');
+  assert.equal(fs.existsSync(path.join(backend.root,'audio/_urls.json')),false,'no persistent audio URLs');
 });

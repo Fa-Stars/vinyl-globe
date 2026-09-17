@@ -5,7 +5,9 @@ const MAX_STALE = 30 * 86400000;
 
 // Uniformly draw exact IDs across the live catalog's numeric range. Missing IDs
 // are rejected, never replaced with a nearby song (which would favor sparse areas).
-function createDiscovery({ request, random = Math.random, now = Date.now, cachedBounds, saveBounds = () => {} }) {
+function createDiscovery({ request, random = Math.random, now = Date.now, cachedBounds, saveBounds = () => {}, acceptTrack, normalizeTrack }) {
+  const accept = typeof acceptTrack === 'function' ? acceptTrack :
+    typeof normalizeTrack === 'function' ? normalizeTrack : null;
   let bounds = cachedBounds;
   let boundsRequest = null;
   function validBounds(value) {
@@ -46,7 +48,7 @@ function createDiscovery({ request, random = Math.random, now = Date.now, cached
       const maxId = await range();
       const tracks = new Map();
       const attempted = new Set();
-      for (let attempt = 0; attempt < 4 && tracks.size < size; attempt++) {
+      for (let attempt = 0; attempt < 8 && tracks.size < size; attempt++) {
         // Oversample holes in the ID range, but keep every request below API limits.
         const count = Math.min(200, Math.max(16, (size - tracks.size) * 4), maxId);
         const ids = new Set();
@@ -64,10 +66,17 @@ function createDiscovery({ request, random = Math.random, now = Date.now, cached
         const fresh = [];
         for (const id of ids) {
           const track = found.get(id);
-          if (track?.audio && !tracks.has(id) && tracks.size < size) {
-            tracks.set(id, track);
-            fresh.push(track);
+          if (!track?.audio || tracks.has(id) || tracks.size >= size) continue;
+          let accepted = track;
+          try {
+            if (accept) accepted = accept(track);
+          } catch {
+            accepted = null;
           }
+          if (!accepted) continue;
+          const normalized = accepted === true ? track : accepted;
+          tracks.set(id, normalized);
+          fresh.push(normalized);
         }
         if (fresh.length) onTracks(fresh);
       }

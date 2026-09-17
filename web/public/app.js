@@ -19,6 +19,10 @@ const npCurrentTime = el('np-current-time');
 const npDuration = el('np-duration');
 const npMode = el('np-mode');
 const npIndex = el('np-index');
+const npRights = el('np-rights');
+const npSourceLink = el('np-source-link');
+const npLicenseLink = el('np-license-link');
+const npRightsNote = el('np-rights-note');
 const globeCountry = el('globe-country');
 const globeHint = el('globe-hint');
 const globeLat = el('globe-lat');
@@ -35,6 +39,7 @@ const deckTipCopy = el('deck-tip-copy');
 const headerStatusText = el('header-status-text');
 const sourceLink = el('source-link');
 const settingsButton = el('settings-button');
+const settingsButtonLabel = el('settings-button-label');
 const settingsModal = el('settings-modal');
 const settingsClose = el('settings-close');
 const settingsCancel = el('settings-cancel');
@@ -42,6 +47,7 @@ const settingsSave = el('settings-save');
 const settingsToggleKey = el('settings-toggle-key');
 const settingsClientId = el('jamendo-client-id');
 const settingsStatus = el('settings-status');
+const settingsWebHelp = el('settings-web-help');
 
 const globe = document.getElementById('globe');
 const gctx = globe.getContext('2d');
@@ -56,18 +62,30 @@ let started = false;      // 用户当前是否希望继续播放（暂停会取
 let playbackState = 'idle';
 let skipCount = 0;
 let watchdog = null;
-let autoTimer = null;     // 试听结束自动切换的定时器
+let autoTimer = null;     // 歌曲结束自动切换的定时器
 let highlightCode = null; // 当前高亮国家（像素地球仪）
 let rot = 0;              // 地球仪旋转（经度，度）
 let targetRot = null;     // 要转到的国家经度（null = 空闲自转）
 let trackNumber = 0;
 let nextRequest = 0;
-let sourceMode = 'itunes';
+let sourceMode = 'jamendo';
+let setupRequired = false;
 let settingsReturnFocus = null;
+let settingsGeneration = 0;
+
+const JAMENDO_HOSTS = new Set(['jamendo.com', 'www.jamendo.com']);
+const CREATIVE_COMMONS_HOST = 'creativecommons.org';
+const CREATIVE_COMMONS_LICENSES = new Map([
+  ['by', 'BY'], ['by-sa', 'BY-SA'], ['by-nd', 'BY-ND'],
+  ['by-nc', 'BY-NC'], ['by-nc-sa', 'BY-NC-SA'], ['by-nc-nd', 'BY-NC-ND'],
+]);
+const CREATIVE_COMMONS_VERSIONS = new Set(['1.0', '2.0', '2.5', '3.0', '4.0']);
+const SETUP_REQUIRED_MESSAGE = '需要配置 Jamendo client_id · 请在设置中填写，或设置 JAMENDO_CLIENT_ID 后重启服务';
 
 // 歌曲接口挂起时及时释放播放控制，避免实体按钮/网页长期停在切换状态。
 // 首次初始化在线编号范围可能较慢；后续切歌无需等待整首音频或地区解析。
 const SONG_REQUEST_TIMEOUT_MS = 45000;
+const SONG_CANDIDATE_TTL_MS = 15 * 60 * 1000;
 
 // 地图呈现归属：保留原始网格编码，但在界面上作为同一显示区域处理。
 const DISPLAY_CODE_ALIASES = { TW: 'CN' };
@@ -133,14 +151,119 @@ function setDeckBadge(text, state) {
   else delete deckBadge.dataset.state;
 }
 
-function updateSourceLabels(mode) {
-  sourceMode = mode === 'jamendo' ? 'jamendo' : 'itunes';
-  const isFullTrack = sourceMode === 'jamendo';
-  headerStatusText.textContent = isFullTrack ? 'FULL TRACKS · JAMENDO' : '30 SEC PREVIEWS · ITUNES';
-  npMode.textContent = isFullTrack ? 'FULL TRACK' : '30 SEC PREVIEW';
-  sourceLink.textContent = isFullTrack ? 'Jamendo' : 'iTunes';
-  sourceLink.href = isFullTrack ? 'https://www.jamendo.com' : 'https://www.apple.com/itunes/';
-  settingsButton.innerHTML = '<span aria-hidden="true">⚙</span> ' + (window.electronAPI ? 'Jamendo 设置' : '播放模式');
+function normalizedTrackId(value) {
+  const id = String(value == null ? '' : value).trim();
+  if (!/^\d+$/.test(id)) return '';
+  const normalized = id.replace(/^0+(?=\d)/, '');
+  const numeric = Number(normalized);
+  return Number.isSafeInteger(numeric) && numeric > 0 ? String(numeric) : '';
+}
+
+function validateJamendoTrackUrl(value, trackId) {
+  if (typeof value !== 'string' || value.length > 2048) return '';
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || url.username || url.password || url.port || url.search || url.hash) return '';
+    if (!JAMENDO_HOSTS.has(url.hostname.toLowerCase())) return '';
+    const match = url.pathname.match(/^\/track\/(\d+)\/?$/i);
+    const id = normalizedTrackId(trackId);
+    if (!match || (id && normalizedTrackId(match[1]) !== id)) return '';
+    return 'https://www.jamendo.com/track/' + normalizedTrackId(match[1]);
+  } catch (error) {
+    return '';
+  }
+}
+
+function validateLicense(value) {
+  if (!value || typeof value !== 'object' || typeof value.name !== 'string' || typeof value.url !== 'string') return null;
+  let url;
+  try {
+    url = new URL(value.url);
+  } catch (error) {
+    return null;
+  }
+  if (url.protocol !== 'https:' || url.hostname.toLowerCase() !== CREATIVE_COMMONS_HOST ||
+      url.username || url.password || url.port || url.search || url.hash) return null;
+  const match = url.pathname.match(/^\/licenses\/(by|by-sa|by-nd|by-nc|by-nc-sa|by-nc-nd)\/(1\.0|2\.0|2\.5|3\.0|4\.0)(?:\/([^/]+))?\/?$/i);
+  if (!match) return null;
+  const code = match[1].toLowerCase();
+  const version = match[2];
+  const suffix = match[3] || '';
+  if (!CREATIVE_COMMONS_LICENSES.has(code) || !CREATIVE_COMMONS_VERSIONS.has(version) ||
+      (suffix && !/^(?:[a-z]{2}(?:-[a-z]{2})?|deed\.[a-z]{2}(?:-[a-z]{2})?)$/i.test(suffix))) return null;
+  const expectedName = 'CC ' + CREATIVE_COMMONS_LICENSES.get(code) + ' ' + version;
+  if (value.name.trim() !== expectedName) return null;
+  return { name: value.name.trim(), url: url.href };
+}
+
+function clearSafeLink(link) {
+  if (!link) return;
+  link.hidden = true;
+  link.textContent = '';
+  if (typeof link.removeAttribute === 'function') link.removeAttribute('href');
+  else link.href = '';
+}
+
+function setSafeLink(link, text, href) {
+  if (!link) return;
+  clearSafeLink(link);
+  if (!href) return;
+  link.textContent = text;
+  if (typeof link.setAttribute === 'function') link.setAttribute('href', href);
+  else link.href = href;
+  link.hidden = false;
+}
+
+function resetTrackRights() {
+  clearSafeLink(npSourceLink);
+  clearSafeLink(npLicenseLink);
+  if (npRightsNote) npRightsNote.hidden = true;
+  if (npRights) npRights.hidden = true;
+}
+
+function renderTrackRights(song) {
+  resetTrackRights();
+  const sourceHref = validateJamendoTrackUrl(song.sourceUrl, song.id);
+  const license = validateLicense(song.license);
+  setSafeLink(npSourceLink, '歌曲原页', sourceHref);
+  setSafeLink(npLicenseLink, license ? license.name : '', license ? license.url : '');
+  if (npRightsNote) npRightsNote.hidden = !license;
+  if (npRights) npRights.hidden = !(sourceHref || license);
+}
+
+function setupMessage(message) {
+  return typeof message === 'string' && message.trim() ? message : SETUP_REQUIRED_MESSAGE;
+}
+
+function showSetupRequired(message) {
+  setupRequired = true;
+  sourceMode = 'setup-required';
+  started = false;
+  nextRequest++;
+  if (activeSongRequest) activeSongRequest.controller.abort();
+  if (fetching) fetching.controller.abort();
+  activeSongRequest = null;
+  fetching = null;
+  nextSong = null;
+  clearPlaybackTimers();
+  audio.pause();
+  setPlaybackState('setup-required', setupMessage(message));
+}
+
+function updateSourceLabels(mode, configured) {
+  const explicitlySetupRequired = mode === 'setup-required' || configured === false;
+  if (explicitlySetupRequired) setupRequired = true;
+  // Once the API has explicitly reported missing credentials, keep that
+  // state for this page even if an earlier /api/info request arrives late.
+  else if (!setupRequired && (mode === 'jamendo' || mode == null)) setupRequired = false;
+  sourceMode = setupRequired ? 'setup-required' : 'jamendo';
+  headerStatusText.textContent = setupRequired ? 'SETUP REQUIRED · JAMENDO' : 'FULL TRACKS · JAMENDO';
+  npMode.textContent = setupRequired ? 'SETUP REQUIRED' : 'JAMENDO FULL TRACK';
+  sourceLink.textContent = 'Jamendo';
+  sourceLink.href = 'https://www.jamendo.com';
+  if (settingsButtonLabel) settingsButtonLabel.textContent = window.electronAPI ? 'Jamendo 设置' : '播放设置';
+  if (settingsWebHelp) settingsWebHelp.hidden = Boolean(window.electronAPI);
+  if (setupRequired) showSetupRequired();
 }
 
 function setSettingsStatus(text, isError) {
@@ -149,6 +272,7 @@ function setSettingsStatus(text, isError) {
 }
 
 function closeSettings() {
+  settingsGeneration++;
   settingsModal.hidden = true;
   settingsSave.disabled = false;
   settingsCancel.disabled = false;
@@ -160,6 +284,7 @@ function closeSettings() {
 }
 
 async function openSettings() {
+  const generation = ++settingsGeneration;
   settingsReturnFocus = document.activeElement;
   settingsModal.hidden = false;
   setSettingsStatus('');
@@ -171,17 +296,29 @@ async function openSettings() {
     settingsClientId.disabled = true;
     settingsSave.disabled = true;
     settingsToggleKey.disabled = true;
-    setSettingsStatus('浏览器版沿用当前服务模式；如需切换，请使用桌面版设置。', true);
+    if (settingsWebHelp) settingsWebHelp.hidden = false;
+    setSettingsStatus('浏览器版使用服务启动时的 JAMENDO_CLIENT_ID；按上方步骤配置后重启服务。', true);
     settingsClose.focus();
     return;
   }
+  settingsClientId.disabled = true;
+  settingsSave.disabled = true;
+  settingsToggleKey.disabled = true;
   try {
     const settings = await window.electronAPI.getSettings();
+    if (generation !== settingsGeneration) return;
     settingsClientId.value = settings.jamendoClientId || '';
-    setSettingsStatus(settings.mode === 'jamendo' ? '当前模式：Jamendo 全曲' : '当前模式：iTunes 30 秒试听');
-    settingsClientId.focus();
+    setSettingsStatus(settings.mode === 'jamendo' ? '当前模式：Jamendo 全曲' : '当前状态：需要配置 Jamendo client_id');
   } catch (error) {
+    if (generation !== settingsGeneration) return;
     setSettingsStatus('读取设置失败，请重试。', true);
+  } finally {
+    if (generation === settingsGeneration) {
+      settingsClientId.disabled = false;
+      settingsSave.disabled = false;
+      settingsToggleKey.disabled = false;
+      settingsClientId.focus();
+    }
   }
 }
 
@@ -200,7 +337,7 @@ async function saveSettings() {
       settingsToggleKey.disabled = false;
       return;
     }
-    setSettingsStatus(result.mode === 'jamendo' ? '已切换到 Jamendo 全曲模式，正在刷新…' : '已切换到 iTunes 试听模式，正在刷新…');
+    setSettingsStatus(result.mode === 'jamendo' ? '已切换到 Jamendo 全曲模式，正在刷新…' : '已停用播放，正在刷新设置状态…');
     setTimeout(() => window.location.reload(), 350);
   } catch (error) {
     setSettingsStatus('保存失败，请重试。', true);
@@ -244,6 +381,10 @@ function togglePlay() {
     stopPlayback('paused', '已暂停 · 点击唱片继续播放');
     return;
   }
+  if (setupRequired) {
+    setPlaybackState('setup-required', SETUP_REQUIRED_MESSAGE);
+    return;
+  }
   started = true;
   skipCount = 0;
   if (!current) { next(); return; }
@@ -262,13 +403,14 @@ function setPlaybackState(state, message) {
   setPlayingUI(state === 'playing');
   const badge = {
     loading: 'SEARCHING', buffering: 'BUFFERING', retrying: 'RETRYING',
-    offline: 'OFFLINE', error: 'STOPPED',
+    offline: 'OFFLINE', error: 'STOPPED', 'setup-required': 'SETUP REQUIRED',
   }[state];
   if (badge) setDeckBadge(badge, 'loading');
   btnPlay.textContent = started ? '⏸' : '▶';
   btnPlay.setAttribute('aria-label', started ? '暂停' : '播放');
   btnPlay.setAttribute('aria-pressed', String(started));
-  if (started && state !== 'playing') deckTipCopy.textContent = '正在准备播放 · 点击唱片暂停';
+  if (state === 'setup-required') deckTipCopy.textContent = '请先配置 Jamendo client_id · 打开播放设置';
+  else if (started && state !== 'playing') deckTipCopy.textContent = '正在准备播放 · 点击唱片暂停';
   else if (state === 'ready') deckTipCopy.textContent = '点击唱片或按空格开始播放';
   if (message) setStatus(message);
 }
@@ -286,6 +428,10 @@ function stopPlayback(state, message) {
 }
 
 function requestPlayback() {
+  if (setupRequired) {
+    setPlaybackState('setup-required', SETUP_REQUIRED_MESSAGE);
+    return;
+  }
   const request = nextRequest;
   setPlaybackState('buffering', '正在启动音频…');
   armWatchdog();
@@ -331,6 +477,10 @@ function armWatchdog() {
 
 function autoSkip(reason) {
   if (!started || playbackState === 'retrying') return;
+  if (setupRequired) {
+    showSetupRequired();
+    return;
+  }
   clearPlaybackTimers();
   if (navigator.onLine === false) {
     setPlaybackState('offline', '网络已断开 · 恢复连接后继续播放');
@@ -412,9 +562,28 @@ function fetchSong() {
   const timeout = setTimeout(() => controller.abort(), SONG_REQUEST_TIMEOUT_MS);
   const promise = (async () => {
     const r = await fetch('/api/song', { signal: controller.signal, cache: 'no-store' });
-    if (!r.ok) throw new Error('api ' + r.status);
+    if (!r.ok) {
+      if (r.status === 503) {
+        let detail = null;
+        try { detail = await r.json(); } catch (error) { /* use the generic setup message */ }
+        if (detail && detail.code === 'JAMENDO_SETUP_REQUIRED') {
+          const setupError = new Error(setupMessage(detail.error));
+          setupError.code = detail.code;
+          throw setupError;
+        }
+      }
+      throw new Error('api ' + r.status);
+    }
     const song = await r.json();
     if (!song || typeof song.streamUrl !== 'string' || !song.streamUrl) throw new Error('invalid song');
+    // Cancellation can race with parsing a response that already arrived.
+    // Release only cancelled results; an adopted prefetch remains usable.
+    if (controller.signal.aborted) {
+      releaseSongAudio(song);
+      const error = new Error('song request cancelled');
+      error.name = 'AbortError';
+      throw error;
+    }
     return song;
   })().finally(() => clearTimeout(timeout));
   return { controller, promise };
@@ -422,11 +591,6 @@ function fetchSong() {
 
 const artworkCache = new Map();
 const ARTWORK_CACHE_LIMIT = 24;
-
-function highResArtworkUrl(url) {
-  // iTunes RSS 通常只给 100px 缩略图；同一 CDN 支持更适合唱片尺寸的版本。
-  return url.replace(/\/\d{2,4}x\d{2,4}(?:bb)?(?=\.(?:jpe?g|png)(?:\?|$))/i, '/600x600bb');
-}
 
 function trimArtworkCache() {
   while (artworkCache.size > ARTWORK_CACHE_LIMIT) {
@@ -441,7 +605,7 @@ function preloadArtwork(url) {
   const cached = artworkCache.get(url);
   if (cached) return cached.ready;
 
-  const candidates = [...new Set([highResArtworkUrl(url), url])];
+  const candidates = [url];
   const entry = { image: null, resolvedUrl: candidates[0], ready: null };
   entry.ready = new Promise((resolve) => {
     let index = 0;
@@ -472,21 +636,61 @@ function preloadArtwork(url) {
 
 function artworkUrlFor(url) {
   const cached = artworkCache.get(url);
-  return cached ? cached.resolvedUrl : highResArtworkUrl(url);
+  return cached ? cached.resolvedUrl : url;
+}
+
+function isFreshSongCandidate(song) {
+  const fetchedAt = Number(song && song.fetchedAt);
+  return !Number.isFinite(fetchedAt) || Date.now() - fetchedAt <= SONG_CANDIDATE_TTL_MS;
+}
+
+function discardSongCandidate(song) {
+  if (song) releaseSongAudio(song);
+}
+
+async function awaitFreshSong(task, request) {
+  let song = await task.promise;
+  if (isFreshSongCandidate(song)) return song;
+  discardSongCandidate(song);
+  if (request !== nextRequest) return null;
+
+  const replacement = fetchSong();
+  activeSongRequest = replacement;
+  try {
+    song = await replacement.promise;
+    if (!isFreshSongCandidate(song)) {
+      discardSongCandidate(song);
+      const staleError = new Error('stale song candidate');
+      staleError.code = 'STALE_SONG';
+      throw staleError;
+    }
+    return song;
+  } finally {
+    if (activeSongRequest === replacement) activeSongRequest = null;
+  }
 }
 
 function prefetch() {
-  if (fetching || nextSong) return;
+  if (setupRequired || sourceMode !== 'jamendo' || fetching || nextSong) return;
   const task = fetchSong();
   fetching = task;
   task.promise
     .then((s) => {
       if (fetching !== task) return;
+      if (!isFreshSongCandidate(s)) {
+        discardSongCandidate(s);
+        return;
+      }
       nextSong = s;
       s.artworkReady = preloadArtwork(s.artwork);
     })
-    .catch(() => {})
-    .finally(() => { if (fetching === task) fetching = null; });
+    .catch((error) => {
+      if (error && error.code === 'JAMENDO_SETUP_REQUIRED') showSetupRequired(error.message);
+    })
+    .finally(() => {
+      if (fetching !== task) return;
+      fetching = null;
+    });
 }
 
 // 歌曲开始后，异步解析艺术家国籍并点亮地球仪（未解析到时轮询）
@@ -585,6 +789,7 @@ function setSong(s) {
   invalidateCountryPoll();
   const previous = current;
   current = s;
+  renderTrackRights(s);
   trackNumber = (trackNumber % 99) + 1;
   npIndex.textContent = String(trackNumber).padStart(2, '0');
   setCountry(s.countrycode, s.countrycode ? s.country : '正在定位…');
@@ -631,6 +836,11 @@ function setSong(s) {
 }
 
 async function next(reason = 'manual') {
+  if (setupRequired) {
+    started = false;
+    setPlaybackState('setup-required', SETUP_REQUIRED_MESSAGE);
+    return;
+  }
   const request = ++nextRequest;
   if (activeSongRequest) activeSongRequest.controller.abort();
   activeSongRequest = null;
@@ -640,16 +850,21 @@ async function next(reason = 'manual') {
   audio.pause();
   let s = nextSong;
   nextSong = null;
+  if (s && !isFreshSongCandidate(s)) {
+    discardSongCandidate(s);
+    s = null;
+  }
   if (!s) {
     // 接管正在进行的预取；再次切歌时取消它，迟到的响应不能写回下一首。
     const task = fetching || fetchSong();
     fetching = null;
     activeSongRequest = task;
     try {
-      s = await task.promise;
+      s = await awaitFreshSong(task, request);
     } catch (e) {
       if (request === nextRequest) {
-        if (started) autoSkip('获取歌曲失败，正在重试…');
+        if (e && e.code === 'JAMENDO_SETUP_REQUIRED') showSetupRequired(e.message);
+        else if (started) autoSkip('获取歌曲失败，正在重试…');
         else setPlaybackState(navigator.onLine === false ? 'offline' : 'error', '获取歌曲失败或超时 · 点击播放重试');
       }
       return;
@@ -1056,11 +1271,14 @@ window.addEventListener('keydown', (event) => {
 async function loadAppInfo() {
   try {
     const response = await fetch('/api/info', { cache: 'no-store' });
-    if (!response.ok) return;
+    if (!response.ok) {
+      updateSourceLabels('jamendo');
+      return;
+    }
     const info = await response.json();
-    updateSourceLabels(info.mode);
+    updateSourceLabels(info.mode, info.configured);
   } catch (error) {
-    updateSourceLabels('itunes');
+    updateSourceLabels('jamendo');
   }
 }
 

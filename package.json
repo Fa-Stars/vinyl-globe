@@ -27,13 +27,22 @@
       "desktop/electron/**/*",
       "web/server.js",
       "web/country-resolver.js",
-      "web/public/**/*",
+      "web/public/index.html",
+      "web/public/app.js",
+      "web/public/style.css",
+      "web/public/map.json",
+      "web/public/capitals.json",
       "runtime-cache.js",
       "package.json",
       "web/jamendo-country.js",
       "web/jamendo-country-seed.json",
       "web/verified-artist-countries.json",
-      "web/random-discovery.js"
+      "web/random-discovery.js",
+      "web/jamendo-metadata.js",
+      "MUSIC_USAGE.md",
+      "!**/data/**",
+      "!**/*.{mp3,m4a,aac,flac,wav,ogg,opus}",
+      "!**/config.json"
     ],
     "asarUnpack": [
       "web/server.js",
@@ -43,7 +52,8 @@
       "web/jamendo-country.js",
       "web/jamendo-country-seed.json",
       "web/verified-artist-countries.json",
-      "web/random-discovery.js"
+      "web/random-discovery.js",
+      "web/jamendo-metadata.js"
     ],
     "win": {
       "target": [

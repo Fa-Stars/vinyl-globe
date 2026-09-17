@@ -4,70 +4,115 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const { startBackend } = require('../test-support/backend.cjs');
 
-const oldTrack = { id: 'old', title: 'Old Track', artist: '', streamUrl: 'http://127.0.0.1:1/old.mp3', artwork: '', countrycode: 'US', country: '美国' };
+const LICENSE = 'https://creativecommons.org/licenses/by-nc-sa/3.0/';
 
-test('Jamendo keeps serving the working catalog while a refresh is pending or fails', async (t) => {
+function track(id, extra = {}) {
+  return {
+    id: String(id),
+    name: 'Track ' + id,
+    artist_id: 'artist-' + id,
+    artist_name: 'Artist ' + id,
+    audio: 'https://api.jamendo.com/audio/' + id,
+    duration: 180,
+    license_ccurl: LICENSE,
+    ...extra,
+  };
+}
+
+function reply(res, results, extra = {}) {
+  res.end(JSON.stringify({ headers: { status: 'success', ...extra }, results }));
+}
+
+test('Jamendo keeps serving the working live catalog while a refresh is pending or fails', async (t) => {
   let failRefresh;
+  let initial = true;
   let failed = false;
-  let requested;
-  const requestStarted = new Promise((resolve) => { requested = resolve; });
+  let refreshStarted;
+  const requestStarted = new Promise((resolve) => { refreshStarted = resolve; });
   const backend = await startBackend(t, {
-    pool: [oldTrack, {...oldTrack,id:'old2',title:'Second Track'}], audio: { old:'cached-audio', old2:'cached-audio' },
-    upstream(_req, res) {
-      if (failed) { res.writeHead(404); res.end(); return; }
-      failRefresh = () => { failed = true; res.writeHead(404); res.end(); };
-      requested();
+    catalogMaxId: 8,
+    upstream(req, res) {
+      const u = new URL(req.url, 'http://localhost');
+      const route = u.searchParams.get('path');
+      if (route === '/v3.0/tracks/') {
+        if (u.searchParams.get('order')) return reply(res, [{ id: '8' }]);
+        const ids = (u.searchParams.get('id') || '').split('+').filter(Boolean);
+        if (initial) {
+          initial = false;
+          return reply(res, ids.map(id => track(id, { name: 'Old ' + id })));
+        }
+        if (failed) {
+          res.writeHead(503);
+          return res.end();
+        }
+        refreshStarted();
+        failRefresh = () => {
+          failed = true;
+          res.writeHead(503);
+          res.end();
+        };
+        return;
+      }
+      if (route === '/v3.0/artists/locations/') return reply(res, []);
+      if (route && route.startsWith('/audio/')) return res.end('live audio');
+      res.writeHead(404);
+      res.end();
     },
   });
+  // The first request registers six live candidates. Consume one so forced
+  // refresh has work to do while the five remaining candidates stay usable.
+  const first = await (await backend.request('/api/song')).json();
   await backend.triggerRefresh();
   await requestStarted;
   const during = await backend.request('/api/song');
   assert.equal(during.status, 200);
-  const firstId = (await during.json()).id;
+  const duringSong = await during.json();
+  assert.notEqual(duringSong.id, first.id);
   failRefresh();
   await backend.waitForOutput(/pool refresh failed/);
   const after = await backend.request('/api/song');
   assert.equal(after.status, 200);
-  assert.notEqual((await after.json()).id, firstId);
-  assert.equal(await (await backend.request('/audio/old')).text(), 'cached-audio');
+  assert.notEqual((await after.json()).id, duringSong.id);
+  assert.equal(await (await backend.request('/audio/' + first.id)).text(), 'live audio');
 });
 
-test('iTunes keeps a cached country available during a failed refresh', { timeout: 10000 }, async (t) => {
-  let release;
-  let requested;
-  const requestStarted = new Promise((resolve) => { requested = resolve; });
+test('Jamendo mode rejects country filters instead of falling back to iTunes', async (t) => {
   const backend = await startBackend(t, {
-    mode: 'itunes', charts: { US: [oldTrack] },
     upstream(req, res) {
-      const target = new URL(req.url, 'http://localhost').searchParams.get('path');
-      if (target.startsWith('/us/')) {
-        release = () => { res.writeHead(404); res.end(); };
-        requested();
-      } else { res.writeHead(404); res.end(); }
+      const u = new URL(req.url, 'http://localhost');
+      if (u.searchParams.get('path') === '/v3.0/tracks/') return reply(res, [{ id: '1' }]);
+      res.writeHead(404);
+      res.end();
     },
   });
-  await backend.waitForOutput(/priming done/);
-  await backend.triggerRefresh();
-  await requestStarted;
-  const during = await backend.request('/api/song?country=US');
-  assert.equal(during.status, 200);
-  assert.equal((await during.json()).title, 'Old Track');
-  release();
-  await backend.waitForRefresh();
-  const after = await backend.request('/api/song?country=US');
-  assert.equal((await after.json()).title, 'Old Track');
-  const countries = await (await backend.request('/api/countries')).json();
-  assert.equal(countries.find((country) => country.code === 'US').count, 1);
+  const response = await backend.request('/api/song?country=US');
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), {
+    code: 'COUNTRY_FILTER_UNSUPPORTED',
+    error: 'Jamendo 模式不支持按国家筛选',
+  });
+  assert.doesNotMatch(backend.output, /iTunes/i);
 });
 
 test('a cold Jamendo startup can retry after the upstream recovers', async (t) => {
   let available = false;
   const backend = await startBackend(t, {
     upstream(req, res) {
-      if (!available) { res.writeHead(404); res.end(); return; }
-      res.setHeader('Content-Type', 'application/json');
-      const id = new URL(req.url,'http://localhost').searchParams.get('id').split('+')[0];
-      res.end(JSON.stringify({ headers: { status: 'success' }, results: [{ id, name: 'Fresh Track', audio: 'http://127.0.0.1:1/fresh.mp3' }] }));
+      const u = new URL(req.url, 'http://localhost');
+      if (!available) {
+        res.writeHead(503);
+        return res.end();
+      }
+      const route = u.searchParams.get('path');
+      if (route === '/v3.0/tracks/') {
+        if (u.searchParams.get('order')) return reply(res, [{ id: '1' }]);
+        const id = (u.searchParams.get('id') || '').split('+')[0] || '1';
+        return reply(res, [track(id, { name: 'Fresh Track' })]);
+      }
+      if (route === '/v3.0/artists/locations/') return reply(res, []);
+      if (route && route.startsWith('/audio/')) return res.end('audio');
+      res.writeHead(404);
+      res.end();
     },
   });
   await backend.waitForOutput(/pool fetch failed/);
@@ -77,34 +122,34 @@ test('a cold Jamendo startup can retry after the upstream recovers', async (t) =
   assert.equal((await response.json()).title, 'Fresh Track');
 });
 
-test('empty random batches preserve an already cached playable track', async t => {
+test('an empty refresh cannot restore a consumed candidate from the session', async t => {
+  let firstBatch = true;
   const backend = await startBackend(t, {
-    pool:[oldTrack], audio:{old:'cached-audio'},
-    upstream(_req,res){res.end(JSON.stringify({headers:{status:'success',results_fullcount:100},results:[]}));},
-  });
-  await backend.triggerRefresh();
-  await backend.waitForRefresh();
-  const response=await backend.request('/api/song');
-  assert.equal(response.status,200);
-  assert.equal((await response.json()).id,'old');
-  assert.equal(await(await backend.request('/audio/old')).text(),'cached-audio');
-});
-
-test('a successful iTunes refresh replaces a cached chart', async (t) => {
-  const backend = await startBackend(t, {
-    mode: 'itunes', charts: { US: [oldTrack] },
+    catalogMaxId: 1,
     upstream(req, res) {
-      const target = new URL(req.url, 'http://localhost').searchParams.get('path');
-      if (!target.startsWith('/us/')) { res.writeHead(404); res.end(); return; }
-      res.end(JSON.stringify({ feed: { entry: [{
-        'im:name': { label: 'New Chart Track' },
-        'im:artist': { label: 'Artist' },
-        link: [{ attributes: { 'im:assetType': 'preview', href: 'https://example.test/preview.mp3' } }],
-      }] } }));
+      const u = new URL(req.url, 'http://localhost');
+      const route = u.searchParams.get('path');
+      if (route === '/v3.0/tracks/') {
+        if (u.searchParams.get('order')) return reply(res, [{ id: '1' }]);
+        if (firstBatch) {
+          firstBatch = false;
+          return reply(res, [track('1', { name: 'Existing Track' })]);
+        }
+        return reply(res, []);
+      }
+      if (route === '/v3.0/artists/locations/') return reply(res, []);
+      if (route && route.startsWith('/audio/')) return res.end('existing audio');
+      res.writeHead(404);
+      res.end();
     },
   });
-  await backend.waitForOutput(/priming done/);
+  const first = await (await backend.request('/api/song')).json();
+  assert.equal(first.id, '1');
   await backend.triggerRefresh();
-  await backend.waitForRefresh();
-  assert.equal((await (await backend.request('/api/song?country=US')).json()).title, 'New Chart Track');
+  await backend.waitForOutput(/pool refresh failed/);
+  const response = await backend.request('/api/song');
+  assert.equal(response.status, 503);
+  // Metadata history remains available for a paused current song, but cannot
+  // become another pending candidate or restore an offline playlist.
+  assert.equal((await backend.request('/api/info').then(r => r.json())).songs, 1);
 });

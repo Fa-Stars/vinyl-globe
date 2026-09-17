@@ -6,6 +6,37 @@ const path = require('node:path');
 const {selectLocation, lookupJamendoCountry} = require('../web/jamendo-country');
 const {startBackend} = require('../test-support/backend.cjs');
 
+const LICENSE = 'https://creativecommons.org/licenses/by-nc-sa/3.0/';
+
+function liveTrack(id, extra = {}) {
+  return {
+    id: String(id),
+    name: 'Song ' + id,
+    artist_id: 'artist-' + id,
+    artist_name: 'Artist ' + id,
+    audio: 'http://127.0.0.1:1/audio',
+    license_ccurl: LICENSE,
+    ...extra,
+  };
+}
+
+function replyJamendo(res, results) {
+  res.end(JSON.stringify({headers:{status:'success'},results}));
+}
+
+function liveTracks(req, res, {maxId, tracks}) {
+  const u = new URL(req.url, 'http://localhost');
+  const route = u.searchParams.get('path');
+  if (route === '/v3.0/tracks/') {
+    if (u.searchParams.has('order')) return replyJamendo(res, [{id:String(maxId)}]);
+    const ids = (u.searchParams.get('id') || '').split('+').filter(Boolean);
+    return replyJamendo(res, ids.map(id => tracks[String(id)]).filter(Boolean));
+  }
+  if (route === '/v3.0/artists/locations/') return replyJamendo(res, []);
+  res.writeHead(404);
+  res.end();
+}
+
 test('Jamendo country lookup resolves exact artist identity before requesting locations', async () => {
   const calls = [];
   const result = await lookupJamendoCountry('Local Band', null, {clientId: 'test', countries: {CH:'瑞士'}, fetchJson: async url => {
@@ -40,10 +71,21 @@ test('migrates historical Antilles only when the declared locality identifies Si
 
 test('reviewed artist evidence overrides old negative caches but does not match unrelated namesakes', async t => {
   const verified = require('../web/verified-artist-countries.json').JekK;
-  const backend = await startBackend(t, {pool:[{id:verified.trackIds[0], artist:'JekK', title:'Song',streamUrl:'http://127.0.0.1:1/audio'}], setup(root) {
+  const backend = await startBackend(t, {catalogMaxId:1, upstream(req, res) {
+    return liveTracks(req, res, {maxId:1, tracks:{1:liveTrack(1, {
+      artist_id:verified.artistId,
+      artist_name:'JekK',
+      name:'Song',
+    })}});
+  }, setup(root) {
     fs.writeFileSync(path.join(root,'artist-countries.json'), JSON.stringify({JekK:{code:null,source:'none',resolverVersion:8,ts:Date.now()}}));
   }});
-  const rec = await (await backend.request('/api/country?id=' + verified.trackIds[0])).json();
+  await backend.waitForOutput(/Jamendo pool: 1 new random tracks/);
+  const song = await (await backend.request('/api/song')).json();
+  assert.equal(song.id, '1');
+  assert.equal(song.artistId, verified.artistId);
+  assert.deepEqual(song.license, {name:'CC BY-NC-SA 3.0',url:LICENSE});
+  const rec = await (await backend.request('/api/country?id=1')).json();
   assert.equal(rec.countrycode,'FR');
   assert.equal(rec.source,'verified');
   assert.equal(rec.sourceUrl,verified.sourceUrl);
@@ -51,10 +93,17 @@ test('reviewed artist evidence overrides old negative caches but does not match 
 
 test('an unrelated song with a reviewed artist name does not inherit reviewed evidence', async t => {
   const verified = require('../web/verified-artist-countries.json').JekK;
-  const backend = await startBackend(t, {pool:[
-    {id:'unrelated',artist:'JekK',title:'Other',streamUrl:'http://127.0.0.1:1/audio'},
-    {id:verified.trackIds[0],artist:'JekK',title:'Verified',streamUrl:'http://127.0.0.1:1/audio'},
-  ], upstream(_req,res){res.end(JSON.stringify({headers:{status:'success'},results:[]}));}});
-  const rec = await (await backend.request('/api/country?id=unrelated')).json();
+  const backend = await startBackend(t, {catalogMaxId:2, upstream(req, res) {
+    return liveTracks(req, res, {maxId:2, tracks:{
+      1:liveTrack(1, {artist_id:'unrelated-artist',artist_name:'JekK',name:'Other'}),
+      2:liveTrack(2, {artist_id:verified.artistId,artist_name:'JekK',name:'Verified'}),
+    }});
+  }});
+  await backend.waitForOutput(/Jamendo pool: 2 new random tracks/);
+  const reviewed = await (await backend.request('/api/country?id=2')).json();
+  assert.equal(reviewed.countrycode,'FR');
+  assert.equal(reviewed.source,'verified');
+  assert.equal(reviewed.sourceUrl,verified.sourceUrl);
+  const rec = await (await backend.request('/api/country?id=1')).json();
   assert.equal(rec.countrycode,'');
 });

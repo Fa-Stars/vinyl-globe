@@ -8,7 +8,17 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
 
-async function startBackend(t, { mode = 'jamendo', pool = [], charts = {}, audio = {}, upstream, setup, catalogMaxId = 800000 } = {}) {
+async function startBackend(t, {
+  mode = 'jamendo',
+  credentials = mode === 'jamendo',
+  pool = [],
+  charts = {},
+  audio = {},
+  upstream,
+  setup,
+  catalogMaxId = 800000,
+  now,
+} = {}) {
   const temp = fs.realpathSync(os.tmpdir());
   const root = fs.mkdtempSync(path.join(temp, 'vinyl-regression-'));
   const write = (name, content) => {
@@ -16,6 +26,9 @@ async function startBackend(t, { mode = 'jamendo', pool = [], charts = {}, audio
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, typeof content === 'string' ? content : JSON.stringify(content));
   };
+  // These seed options are deliberately available for startup-purge tests. Runtime
+  // tests should register tracks through the mocked live API and use backend.write
+  // only after startup, because the application must not restore these files.
   if (pool.length) write('jamendo/pool.json', pool);
   if (catalogMaxId) write('catalog-bounds.json', { maxId: catalogMaxId, checkedAt: Date.now() });
   for (const [code, songs] of Object.entries(charts)) write('songs/' + code + '.json', songs);
@@ -37,18 +50,23 @@ async function startBackend(t, { mode = 'jamendo', pool = [], charts = {}, audio
       ...process.env,
       PORT: String(port),
       WORLD_VINYL_HOST: '127.0.0.1',
-      JAMENDO_CLIENT_ID: mode === 'jamendo' ? 'test-only' : '',
+      JAMENDO_CLIENT_ID: credentials ? 'test-only' : '',
       WORLD_VINYL_DATA_DIR: root,
       WORLD_VINYL_CLEAR_CACHE_ON_EXIT: '0',
       WORLD_VINYL_BROWSER_LIFECYCLE: '0',
       WORLD_VINYL_TEST_UPSTREAM: 'http://127.0.0.1:' + remote.address().port,
+      ...(Number.isFinite(now) ? { WORLD_VINYL_TEST_NOW: String(now) } : {}),
     },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
   let output = '';
   let refreshDone;
   let finishRefresh;
-  child.on('message', (message) => { if (message === 'refresh-finished' && finishRefresh) finishRefresh(); });
+  let finishClock;
+  child.on('message', (message) => {
+    if (message === 'refresh-finished' && finishRefresh) finishRefresh();
+    if (message && message.type === 'clock-updated' && finishClock) finishClock();
+  });
   const exit = once(child, 'exit');
   child.stdout.on('data', (chunk) => { output += chunk; });
   child.stderr.on('data', (chunk) => { output += chunk; });
@@ -79,6 +97,10 @@ async function startBackend(t, { mode = 'jamendo', pool = [], charts = {}, audio
     root,
     port,
     child,
+    write,
+    read(name) { return fs.readFileSync(path.join(root, name), 'utf8'); },
+    exists(name) { return fs.existsSync(path.join(root, name)); },
+    remove(name) { fs.rmSync(path.join(root, name), { recursive: true, force: true }); },
     get output() { return output; },
     waitForRefresh: () => refreshDone,
     request: (pathname, options = {}) => fetch('http://127.0.0.1:' + port + pathname, {
@@ -109,6 +131,11 @@ async function startBackend(t, { mode = 'jamendo', pool = [], charts = {}, audio
       };
       child.on('message', onMessage);
       child.send('refresh');
+    }),
+    setClock: (value) => new Promise((resolve) => {
+      if (!Number.isFinite(value)) throw new TypeError('clock must be finite');
+      finishClock = resolve;
+      child.send({ type: 'clock', now: value });
     }),
   };
 }

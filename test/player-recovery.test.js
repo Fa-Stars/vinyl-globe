@@ -171,7 +171,7 @@ test('late startup information does not overwrite an earlier user play action', 
   let finishInfo;
   const player = await createPlayer({
     infoResponse(response) {
-      return new Promise((resolve) => { finishInfo = () => resolve(response({ mode: 'itunes' })); });
+      return new Promise((resolve) => { finishInfo = () => resolve(response({ mode: 'jamendo', configured: true })); });
     },
   });
   await player.click('btn-play');

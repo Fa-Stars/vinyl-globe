@@ -16,8 +16,8 @@ node web/server.js     # 或 Windows 下双击 web/start.bat
 ```
 
 - 端口：`PORT` 环境变量（默认 3000）
-- 播放完整歌曲需要 Jamendo key：在 `data/config.json` 的 `jamendoClientId` 填入
-  （当前项目已填好）。未配置则自动回退 iTunes 30 秒试听模式。
+- 播放需要自行配置 Jamendo key：在 `data/config.json` 的 `jamendoClientId` 填入。
+  未配置时进入 `setup-required` 状态，不请求曲库；没有 iTunes 兜底。
 
 ## 文件地图（改哪里看这里）
 
@@ -57,7 +57,7 @@ node web/server.js     # 或 Windows 下双击 web/start.bat
 
 | 端点 | 说明 |
 | --- | --- |
-| `GET /api/song` | 随机一首歌 `{title, artist, album, streamUrl, artwork, duration, countrycode, country, id}` |
+| `GET /api/song` | 随机一首歌 `{title, artist, album, streamUrl, artwork, duration, countrycode, country, id, sourceUrl, license: {name, url}}`；缺凭证返回 503 / `JAMENDO_SETUP_REQUIRED` |
 | `GET /api/country?id=…` | 艺人地区：核实资料 → Jamendo 批量查询 → MusicBrainz；可信结果缓存 30 天，确认无资料缓存 1 天 |
 | `GET /api/info` | 模式与统计 |
 | `GET /audio/{id}` | 本地缓存或 Jamendo 流式转发；转发时取消同一首的重复预下载，后台继续预取后续歌曲 |
@@ -94,20 +94,19 @@ vinyl-globe/
 ├── runtime-cache.js     # 两种启动方式共用的退出清理逻辑
 └── data/                # 运行缓存（可删，会自动重建）
     ├── config.json      # Jamendo key 配置
-    ├── jamendo/pool.json        # 歌曲池缓存
-    ├── songs/           # iTunes 兜底模式缓存
-    ├── audio/           # 音频预下载缓存（4 首流水线）
+    ├── catalog-bounds.json      # 仅最大编号和查询时间
+    ├── audio/           # 会话内临时音频缓冲（目标 2 首，下载并发 1）
     ├── artist-countries.json    # 艺术家国籍解析缓存
     └── ne_110m_admin_0_countries.geojson  # 地图源数据（build-map 用）
 ```
 
 ## 注意事项
 
-- `data/` 下的歌曲、音频、歌曲池和艺术家国家文件都是**运行时缓存**：程序退出时会自动清理，删掉也会重新生成（音频缓存会重新下载，约几分钟）；`data/config.json` 属于配置，会保留；
-  改前端/后端时无需动它们。
+- 歌曲池与远程 URL 仅在进程内存中。启动清理旧 `audio/`、`jamendo/`、`songs/`，不恢复跨会话曲库；正常退出还会清理地区等运行缓存。`config.json` 与数字编号边界保留。
+- 音频预取目标为 2 首，同时只下载 1 首；最多 3 首完整缓存，单首 16 MiB、总计 48 MiB（含临时文件）、有效期 15 分钟；超限歌曲走在线流式播放。不要扩展为离线曲库，具体使用边界见 [MUSIC_USAGE.md](MUSIC_USAGE.md)。
 - `data/config.json` 里的 Jamendo key 是账号凭证：**已被 .gitignore 排除，不会进入仓库**。
   - 克隆仓库后需要先 `copy data\config.example.json data\config.json` 并填入自己的 key
-  - 发给协作者没问题（免费），公开仓库请用对方自己的 key
+  - 协作者使用自己的应用凭证，不共享个人 key
 - 改 `web/public/app.js` 的地球部分后，同步更新 `web/scripts/render-globe.js` 保持一致，
   便于离线预览。
 

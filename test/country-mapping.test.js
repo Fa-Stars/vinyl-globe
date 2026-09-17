@@ -88,7 +88,7 @@ function waitForServer(child, port) {
   });
 }
 
-test('does not report legacy pool countries as authoritative for Jamendo songs', async () => {
+test('ignores legacy pools and untrusted country records when discovering live Jamendo songs', async () => {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'world-vinyl-country-'));
   const jamendoRoot = path.join(dataRoot, 'jamendo');
   fs.mkdirSync(jamendoRoot, { recursive: true });
@@ -144,6 +144,7 @@ test('does not report legacy pool countries as authoritative for Jamendo songs',
     },
   }));
 
+  fs.writeFileSync(path.join(dataRoot, 'catalog-bounds.json'), JSON.stringify({ maxId: 3, checkedAt: Date.now() }));
   const port = 32000 + (process.pid % 1000);
   const child = spawn(process.execPath, ['--require', path.join(projectRoot, 'test-support/country-empty-preload.cjs'), 'web/server.js'], {
     cwd: projectRoot,
@@ -151,8 +152,10 @@ test('does not report legacy pool countries as authoritative for Jamendo songs',
       ...process.env,
       WORLD_VINYL_DATA_DIR: dataRoot,
       JAMENDO_CLIENT_ID: 'test-only',
-      WORLD_VINYL_PORT: String(port),
+      PORT: String(port),
+      WORLD_VINYL_HOST: '127.0.0.1',
       WORLD_VINYL_CLEAR_CACHE_ON_EXIT: '0',
+      WORLD_VINYL_BROWSER_LIFECYCLE: '0',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -166,8 +169,14 @@ test('does not report legacy pool countries as authoritative for Jamendo songs',
 
   try {
     await waitForServer(child, port);
-    for (const id of ['1307225', '1305161', '9999999']) {
+    const first = await fetch('http://127.0.0.1:' + port + '/api/song', { signal: AbortSignal.timeout(5000) });
+    assert.equal(first.status, 200);
+    assert.ok(['1', '2', '3'].includes((await first.json()).id));
+    assert.equal(fs.existsSync(path.join(jamendoRoot, 'pool.json')), false);
+    assert.equal((await fetch('http://127.0.0.1:' + port + '/api/country?id=1307225')).status, 404);
+    for (const id of ['1', '2', '3']) {
       const response = await fetch('http://127.0.0.1:' + port + '/api/country?id=' + id);
+      assert.equal(response.status, 200);
       const result = await response.json();
       assert.equal(result.countrycode, '', JSON.stringify(result));
       assert.equal(result.status, 'none', JSON.stringify(result));
@@ -175,6 +184,8 @@ test('does not report legacy pool countries as authoritative for Jamendo songs',
   } finally {
     if (!exited) child.kill();
     await exitPromise;
+    const relative = path.relative(fs.realpathSync(os.tmpdir()), fs.realpathSync(dataRoot));
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Unsafe test cleanup path');
     fs.rmSync(dataRoot, { recursive: true, force: true });
   }
 });

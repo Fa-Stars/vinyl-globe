@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>世界唱片机 · World Vinyl</title>
-  <link rel="stylesheet" href="style.css?v=17">
+  <link rel="stylesheet" href="style.css?v=19">
 </head>
 <body>
   <div class="stage">
@@ -27,7 +27,7 @@
         <p class="subtitle">让下一首歌带你去一个新的坐标</p>
         <div class="topbar-actions">
           <span class="edition-note">DESKTOP EDITION · 01</span>
-          <button class="settings-button" id="settings-button" type="button"><span aria-hidden="true">⚙</span> Jamendo 设置</button>
+          <button class="settings-button" id="settings-button" type="button"><span aria-hidden="true">⚙</span> <span id="settings-button-label">播放设置</span></button>
         </div>
       </div>
     </header>
@@ -35,18 +35,23 @@
     <div class="settings-modal" id="settings-modal" hidden>
       <section class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
         <button class="settings-close" id="settings-close" type="button" aria-label="关闭">×</button>
-        <div class="settings-eyebrow">DESKTOP SETTINGS · 桌面设置</div>
-        <h2 id="settings-title">Jamendo 全曲播放</h2>
+        <div class="settings-eyebrow">PLAYBACK SETTINGS · 播放设置</div>
+        <h2 id="settings-title">Jamendo 播放设置</h2>
         <p class="settings-copy">
           输入 Jamendo 应用的 <code>client_id</code> 后，程序会切换到完整歌曲模式。
-          留空则使用 iTunes 的 30 秒试听。没有凭证？<a href="https://devportal.jamendo.com" target="_blank" rel="noopener">打开 Jamendo 开发者后台</a>。
+          留空会停用播放并显示配置提示。没有凭证？<a href="https://devportal.jamendo.com" target="_blank" rel="noopener">打开 Jamendo 开发者后台</a>。
+        </p>
+        <p class="settings-web-help" id="settings-web-help" hidden>
+          浏览器版请在启动服务的终端设置环境变量，然后重启服务；也可以在 <code>data/config.json</code> 中填写 <code>{"jamendoClientId":"..."}</code>：<br>
+          PowerShell：<code>$env:JAMENDO_CLIENT_ID="你的 client_id"</code><br>
+          macOS / Linux：<code>JAMENDO_CLIENT_ID=你的_client_id node web/server.js</code>
         </p>
         <label class="settings-label" for="jamendo-client-id">Jamendo client_id</label>
         <div class="settings-input-row">
           <input id="jamendo-client-id" type="password" inputmode="text" autocomplete="off" spellcheck="false" placeholder="例如：123456789">
           <button class="settings-secondary" id="settings-toggle-key" type="button">显示</button>
         </div>
-        <p class="settings-hint">凭证只保存在本机用户目录，不会写入公开的 exe。</p>
+        <p class="settings-hint">这是个人非商业原型；凭证只保存在本机用户目录，不会写入公开的 exe。</p>
         <p class="settings-status" id="settings-status" aria-live="polite"></p>
         <div class="settings-actions">
           <button class="settings-secondary" id="settings-cancel" type="button">取消</button>
@@ -92,6 +97,11 @@
             <div class="np-station" id="np-station">——</div>
             <div class="np-country" id="np-country">🌐 ——</div>
             <div class="np-meta" id="np-meta"></div>
+            <div class="np-rights" id="np-rights" hidden aria-label="歌曲来源与许可">
+              <a class="np-track-link" id="np-source-link" href="#" target="_blank" rel="noopener" hidden>歌曲原页</a>
+              <a class="np-license-link" id="np-license-link" href="#" target="_blank" rel="noopener" hidden></a>
+              <span class="np-rights-note" id="np-rights-note" hidden>使用范围以歌曲原页的许可为准。</span>
+            </div>
             <div class="np-source-row">
               <span class="np-source">WORLD VINYL RADIO</span>
               <span class="np-mode" id="np-mode">LOADING MODE</span>
@@ -164,11 +174,11 @@
 
     <footer class="footer">
       <span><kbd>R</kbd> 随机切换 · <kbd>Space</kbd> 播放/暂停 · 点击唱片播放/暂停 · 歌曲结束自动连播</span>
-      <span class="credit">歌曲来自 <a id="source-link" href="https://www.jamendo.com" target="_blank" rel="noopener">Jamendo</a> · 地图数据来自 Natural Earth</span>
+      <span class="credit">歌曲来自 <a id="source-link" href="https://www.jamendo.com" target="_blank" rel="noopener">Jamendo</a> · 个人非商业原型 · 地图数据来自 Natural Earth</span>
     </footer>
   </div>
 
   <audio id="audio" preload="none"></audio>
-  <script src="app.js?v=18"></script>
+  <script src="app.js?v=19"></script>
 </body>
 </html>

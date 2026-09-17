@@ -121,6 +121,8 @@ button:focus-visible, input:focus-visible, a:focus-visible {
 .settings-copy { margin-top: 10px; color: var(--muted); font-size: 13px; line-height: 1.7; }
 .settings-copy code { color: var(--cream); }
 .settings-copy a { color: var(--gold); }
+.settings-web-help { margin-top: 10px; color: #b5c9c2; font-size: 12px; line-height: 1.8; }
+.settings-web-help code { color: var(--cream); overflow-wrap: anywhere; }
 .settings-label { display: block; margin-top: 20px; color: var(--cream); font-size: 12px; }
 .settings-input-row { display: flex; gap: 8px; margin-top: 7px; }
 .settings-input-row input {
@@ -224,6 +226,7 @@ kbd {
 .platter::after {
   content: ""; position: absolute; inset: 3px; border-radius: 50%;
   border: 1px solid rgba(255, 255, 255, .05);
+  pointer-events: none;
 }
 
 /* 海报唱片：专辑封面铺满整张唱片，保留半透明的黑胶纹理 */
@@ -323,6 +326,7 @@ kbd {
   background: radial-gradient(circle at 35% 35%, #e8e8ec, #7d7d85 60%, #3a3a40);
   box-shadow: 0 1px 3px rgba(0, 0, 0, .8);
   z-index: 3;
+  pointer-events: none;
 }
 
 /* 唱臂 */
@@ -422,6 +426,14 @@ kbd {
 }
 .np-country { font-size: 15px; color: var(--cream); }
 .np-meta { font-size: 12px; color: var(--muted); min-height: 1em; }
+.np-rights {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 5px 9px;
+  min-height: 1.1em; color: #b9c5bd; font-size: 11px; line-height: 1.4;
+}
+.np-rights[hidden] { display: none; }
+.np-track-link, .np-license-link { color: var(--gold); text-decoration: none; }
+.np-track-link:hover, .np-license-link:hover { text-decoration: underline; }
+.np-rights-note { width: 100%; color: #77858a; font-size: 10px; }
 .np-source-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 2px; }
 .np-source, .np-mode { color: #8e7550; font: 700 8px/1 "SFMono-Regular", Consolas, monospace; letter-spacing: 1px; }
 .np-mode { color: #789a9a; text-align: right; }

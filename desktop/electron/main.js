@@ -153,6 +153,8 @@ async function startBackend(portOverride) {
     WORLD_VINYL_DATA_DIR: dataRoot(),
     WORLD_VINYL_PUBLIC_DIR: publicRoot(),
     WORLD_VINYL_HOST: '127.0.0.1',
+    // PORT takes precedence in web/server.js; pin it alongside the desktop-specific name.
+    PORT: String(port),
     WORLD_VINYL_PORT: String(port),
   };
   const child = fork(script, [], {
@@ -191,7 +193,7 @@ async function restartBackend() {
 
 function settingsForUi() {
   const id = normalizeClientId(readConfig().jamendoClientId) || '';
-  return { jamendoClientId: id, mode: id ? 'jamendo' : 'itunes' };
+  return { jamendoClientId: id, mode: id ? 'jamendo' : 'setup-required', configured: Boolean(id) };
 }
 
 function registerIpc() {
@@ -200,11 +202,11 @@ function registerIpc() {
     const id = normalizeClientId(value);
     if (id === null) return { ok: false, error: 'client_id 格式不正确' };
     const previous = normalizeClientId(readConfig().jamendoClientId) || '';
-    if (id === previous) return { ok: true, changed: false, mode: id ? 'jamendo' : 'itunes' };
+    if (id === previous) return { ok: true, changed: false, mode: id ? 'jamendo' : 'setup-required', configured: Boolean(id) };
     try {
       writeConfig(id);
       await restartBackend();
-      return { ok: true, changed: true, mode: id ? 'jamendo' : 'itunes' };
+      return { ok: true, changed: true, mode: id ? 'jamendo' : 'setup-required', configured: Boolean(id) };
     } catch (error) {
       try {
         writeConfig(previous);
