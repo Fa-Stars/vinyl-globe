@@ -39,7 +39,7 @@
       "web/verified-artist-countries.json",
       "web/random-discovery.js",
       "web/jamendo-metadata.js",
-      "MUSIC_USAGE.md",
+      "README.md",
       "!**/data/**",
       "!**/*.{mp3,m4a,aac,flac,wav,ogg,opus}",
       "!**/config.json"

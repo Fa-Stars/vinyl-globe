@@ -30,3 +30,8 @@ release-verify/
 Thumbs.db
 .idea/
 .vscode/
+
+# ---- 本地开发助手配置（不随项目发布） ----
+/AGENTS.md
+/.agents/
+/.codex/
