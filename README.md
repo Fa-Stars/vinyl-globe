@@ -74,7 +74,7 @@ npm run dist   # 生成 Windows x64 的 NSIS 安装版和 Portable 免安装版
 
 产物位于 `desktop/release/`，打包后的程序自带运行环境，无需用户另装 Node.js。目录版必须保留整个输出目录，不能只复制其中的 exe。
 
-Git 标签与安装包分别管理。现有 Releases 中的 v1.0.1 安装包属于历史版本，不包含 `main` 的后续更新；需要最新功能时，请从当前源码构建。
+安装版和免安装版可在 [GitHub Releases](https://github.com/Fa-Stars/vinyl-globe/releases) 下载；每次发布会注明版本和构建来源。`main` 可能包含发布后的更新，需要尚未发布的功能时可从当前源码构建。
 
 ## 操作
 
