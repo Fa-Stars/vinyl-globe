@@ -7,6 +7,20 @@
 - 后台保留少量随机候选，目标提前缓冲 2 首，方便连续切歌。
 - 歌曲信息、音频和地区查询独立进行；未知地区不会阻止播放。
 
+## 当前版本与下载
+
+当前发布版本为 **v1.0.2 · Windows x64**，发布文件与项目状态于 **2026-09-18** 核对。
+
+| 下载 | 用途 |
+| --- | --- |
+| [Setup 安装版](https://github.com/Fa-Stars/vinyl-globe/releases/download/v1.0.2/World-Vinyl-1.0.2-x64-Setup.exe) | 安装到电脑，可选择安装目录并创建快捷方式 |
+| [Portable 免安装版](https://github.com/Fa-Stars/vinyl-globe/releases/download/v1.0.2/World-Vinyl-1.0.2-x64-Portable.exe) | 直接运行，无需安装 Node.js |
+| [SHA256 校验文件](https://github.com/Fa-Stars/vinyl-globe/releases/download/v1.0.2/SHA256SUMS.txt) | 核对两个 exe 的下载完整性 |
+
+本版更新包括 Jamendo 完整歌曲与逐曲许可展示、提前缓冲 2 首，以及连续切歌、缓存释放、桌面端口、设置请求竞态和唱片点击响应的修复。首次使用需配置自己的 Jamendo `client_id`，安装包不附带个人凭证或抓取的音频。
+
+安装包构建自 [9924838](https://github.com/Fa-Stars/vinyl-globe/commit/992483815d837d11fc0f43df71c5cc55a7e57452)。原 `v1.0.2` 标签保持不变；标签之后的文档与打包清单整理已纳入该构建。本次状态同步仅更新说明，程序版本和安装包保持 1.0.2。完整发布信息见 [v1.0.2 Release](https://github.com/Fa-Stars/vinyl-globe/releases/tag/v1.0.2)。
+
 ## 快速开始
 
 ### Web 版
@@ -132,6 +146,13 @@ node web/scripts/measure-startup.cjs --reuse-bounds  # 仅复用已有数字编�
 ```
 
 修改地球渲染逻辑时，同步检查预览脚本。测试覆盖播放恢复、快速切歌、音频 Range、缓存限制、授权信息和桌面启动；模拟长时间播放不替代真实网络、系统音频输出和实体硬件验收。
+
+### 验证状态
+
+- **自动化回归**：2026-09-18 运行 `npm test`，80 项通过，0 项失败；包括提前准备 2 首、连续切歌、慢音源、地区回退与缓存清理。
+- **此前桌面交互验收**：播放 / 暂停、唱片点击、连续切歌、歌曲与地区更新、设置窗口及窗口缩放已检查。系统音频回环采样确认播放时有信号、暂停时静音；这不代表主观音质或实体扬声器验收。
+- **发布包检查**：版本号、包内源码及内置服务启动检查通过；页面与静态资源可访问，缺凭证提示正常。两个 exe 的本地 SHA256 与 GitHub 发布资产摘要一致，包内未包含个人凭证或音频缓存。
+- **尚未验收**：本次安装版的完整安装 / 升级流程、真实连续 8 小时播放及实体唱片机硬件。自动化测试中的 8 小时播放使用模拟时钟。
 
 `web/scripts/research-countries.cjs` 用于维护地区资料，会访问在线接口并写入地区种子文件。`data/research-catalog.json` 是该脚本使用的元数据样本，不是运行时播放曲库。
 
