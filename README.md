@@ -1,6 +1,7 @@
-# 🌍 世界唱片机 World Vinyl
+# 🌍 世界唱片机 World Vinyl ———— 让下一首歌带你去一个新的坐标
 
-一个用于个人非商业原型的随机音乐播放器。歌曲来自 Jamendo，切歌时同步更新唱片封面、歌曲信息和像素地球上的艺人地区。支持浏览器运行，也可打包成 Windows 桌面程序。
+一个随机音乐播放器。切歌时同步更新唱片封面、歌曲信息和像素地球上的艺人地区。支持浏览器运行，也可打包成 Windows 桌面程序。
+注意，该项目依赖国际互联网。
 
 - 播放完整歌曲，显示作者、歌曲原页和 Creative Commons 许可证。
 - 启动后准备第一首歌，点击播放才出声；歌曲结束后自动连播。
@@ -109,9 +110,9 @@ npm run dist   # 生成 Windows x64 的 NSIS 安装版和 Portable 免安装版
 - 切走或播放结束后释放该首音频；歌曲池与远程 URL 仅在当前进程内存中。启动时清理遗留音频和旧歌单，正常退出还会清理地区等运行缓存；强制结束进程可能留有临时文件，下次启动会清理。
 - 个人配置与 `catalog-bounds.json` 会保留。后者只含数字编号边界和查询时间，不含歌单或音频。编号边界缓存 6 小时后后台更新，超过 30 天需重新初始化；首次运行可能因边界查询而等待更久。
 - 地区表示艺人的来源地或公开声明的活动地区，不等同于国籍，也不按语言或姓名推断。查询顺序为核实资料、Jamendo 艺人资料、MusicBrainz；无法确认时显示「未知地区」。
-- 地区证据及身份范围保存在 [verified-artist-countries.json](web/verified-artist-countries.json) 和 [jamendo-country-seed.json](web/jamendo-country-seed.json)，运行清理不会删除它们。维护资料时应保留来源链接、核实时间、艺人编号和歌曲编号，避免混淆同名艺人。
+- 地区证据及身份范围保存在 [verified-artist-countries.json](web/verified-artist-countries.json) 和 [jamendo-country-seed.json](web/jamendo-country-seed.json)，运行清理不会删除它们。
 
-歌曲、封面和地区查询依赖网络，缓存不提供离线曲库功能。歌曲元数据返回不代表已经出声，启动速度还受音源与网络影响。
+歌曲、封面和地区查询依赖国际互联网，缓存不提供离线曲库功能。歌曲元数据返回不代表已经出声，启动速度还受音源与网络影响。
 
 ## 音乐使用范围
 
