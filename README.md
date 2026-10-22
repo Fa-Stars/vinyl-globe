@@ -90,6 +90,15 @@ npm run dist   # 生成 Windows x64 的 NSIS 安装版和 Portable 免安装版
 
 安装版和免安装版可在 [GitHub Releases](https://github.com/Fa-Stars/vinyl-globe/releases) 下载；每次发布会注明版本和构建来源。`main` 可能包含发布后的更新，需要尚未发布的功能时可从当前源码构建。
 
+### iOS 版（自用侧载）
+
+`ios/` 是一个 SwiftUI + WKWebView 外壳：全屏显示同一套播放器界面，连接电脑上由
+`ios/start-server.bat` 启动的局域网服务（因此需要电脑开着、手机同一 Wi-Fi）。构建走
+GitHub Actions 的 macOS 机器产出**未签名** `.ipa`，再用 Sideloadly 配免费 Apple ID
+自签安装，不需要 99 美元开发者账号。签名有效期 7 天，到期重签即可。
+
+构建、侧载与限制说明见 [ios/README.md](ios/README.md)。
+
 ## 操作
 
 | 操作 | 效果 |

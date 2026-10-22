@@ -1,0 +1,6 @@
+# XcodeGen 生成物
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+DerivedData/
+build/

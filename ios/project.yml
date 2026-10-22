@@ -1,0 +1,72 @@
+name: WorldVinyl
+
+options:
+  bundleIdPrefix: com.worldvinyl
+  deploymentTarget:
+    iOS: "15.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    # 这里不写死任何证书：侧载时由 Sideloadly / Xcode 重新签名。
+
+targets:
+  WorldVinyl:
+    type: application
+    platform: iOS
+    sources:
+      - path: WorldVinyl
+    info:
+      path: WorldVinyl/Info.plist
+      properties:
+        CFBundleDisplayName: World Vinyl
+        CFBundleName: WorldVinyl
+        CFBundleShortVersionString: "1.0.0"
+        CFBundleVersion: "1"
+        LSRequiresIPhoneOS: true
+        UILaunchScreen: {}
+        UIRequiredDeviceCapabilities:
+          - arm64
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # 个人侧载自用：允许访问局域网内的明文 HTTP 服务。
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+          NSAllowsLocalNetworking: true
+        # iOS 14+ 首次连接同一 Wi-Fi 下的电脑会弹出本地网络授权。
+        NSLocalNetworkUsageDescription: 用于连接同一 Wi-Fi 下运行 World Vinyl 服务器的电脑，获取歌曲与封面。
+        ITSAppUsesNonExemptEncryption: false
+        # 让 WKWebView 的音频在锁屏 / 切到后台后继续播放。
+        UIBackgroundModes:
+          - audio
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.worldvinyl.ios
+        PRODUCT_NAME: WorldVinyl
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SUPPORTS_MACCATALYST: NO
+        IPHONEOS_DEPLOYMENT_TARGET: "15.0"
+
+schemes:
+  WorldVinyl:
+    build:
+      targets:
+        WorldVinyl: all
+    run:
+      config: Debug
+    archive:
+      config: Release
