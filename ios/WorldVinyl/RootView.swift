@@ -79,7 +79,7 @@ private struct OnboardingView: View {
                 """
                 这个版本是播放器的手机遥控外壳：歌曲、封面的解析仍然跑在电脑上。
 
-                1. 在电脑上运行 ios\start-server.bat
+                1. 在电脑上运行 ios/start-server.bat
                 2. 确认手机和电脑连同一个 Wi-Fi
                 3. 填它打印出来的地址，例如 192.168.1.23:3000
                 """
