@@ -468,6 +468,10 @@ async function warmAudioTask(id, entry, controller) {
       headers: { 'User-Agent': UA },
       signal: controller.signal,
     });
+    if (controller.signal.aborted) {
+      await res.body?.cancel();
+      return;
+    }
     if (!res.ok || !res.body) {
       if (res.body) await res.body.cancel();
       return;
@@ -1762,7 +1766,7 @@ const server = http.createServer((req, res) => {
   }, REFRESH_MS);
 
   server.listen(PORT, HOST, () => {
-    console.log('[server] World Vinyl running at http://' + HOST + ':' + PORT);
+    console.log('[server] World Vinyl running at http://' + HOST + ':' + server.address().port);
     console.log('[server] press R on the page to skip to a random song from a random country');
   });
 })();

@@ -6,7 +6,7 @@
   "main": "desktop/electron/main.js",
   "private": true,
   "scripts": {
-    "test": "node --test",
+    "test": "node --test --test-concurrency=4",
     "start": "electron .",
     "pack": "electron-builder --dir",
     "dist": "electron-builder --win nsis portable"

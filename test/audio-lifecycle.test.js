@@ -60,7 +60,8 @@ test('releasing a warming track cancels its upstream and frees the single downlo
   const id = [...opened][0];
   const result = await backend.request('/api/audio/played?id=' + id, { method: 'POST' });
   assert.equal(result.status, 200);
-  await waitUntil(() => closed.has(id) && opened.size >= 2);
+  await waitUntil(() => closed.has(id) && opened.size >= 2,
+    () => 'Opened: ' + [...opened] + '; closed: ' + [...closed] + '\n' + backend.output);
   await waitUntil(() => !backend.exists('audio/' + id + '.mp3.tmp'));
   assert.equal(backend.exists('audio/' + id + '.mp3'), false);
 });

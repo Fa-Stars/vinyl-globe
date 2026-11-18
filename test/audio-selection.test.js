@@ -94,7 +94,8 @@ test('does not queue a second warm download for an audio request already warming
         warmingStarted();
         res.writeHead(200, { 'Content-Type': 'audio/mpeg' });
         res.write('audio-start');
-        return setTimeout(() => res.end('-audio-end'), 250);
+        if (id === warmingId && upstreamHits.get(id) === 1) return;
+        return res.end('-audio-end');
       }
       res.writeHead(404);
       res.end();

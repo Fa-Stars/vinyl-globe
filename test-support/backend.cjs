@@ -2,7 +2,6 @@
 
 const fs = require('node:fs');
 const http = require('node:http');
-const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
@@ -43,15 +42,11 @@ async function startBackend(t, {
     res.end();
   }));
   await new Promise((resolve) => remote.listen(0, '127.0.0.1', resolve));
-  const probe = net.createServer();
-  await new Promise((resolve) => probe.listen(0, '127.0.0.1', resolve));
-  const port = probe.address().port;
-  await new Promise((resolve) => probe.close(resolve));
   const child = spawn(process.execPath, ['--require', path.join(__dirname, 'backend-preload.cjs'), 'web/server.js'], {
     cwd: path.resolve(__dirname, '..'),
     env: {
       ...process.env,
-      PORT: String(port),
+      PORT: '0',
       WORLD_VINYL_HOST: '127.0.0.1',
       JAMENDO_CLIENT_ID: credentials ? 'test-only' : '',
       WORLD_VINYL_DATA_DIR: root,
@@ -85,15 +80,18 @@ async function startBackend(t, {
     if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Unsafe test cleanup path');
     fs.rmSync(root, { recursive: true, force: true });
   });
-  await new Promise((resolve, reject) => {
+  const port = await new Promise((resolve, reject) => {
     const timer = setTimeout(() => finish(new Error('Backend startup timed out\n' + output)), 5000);
-    const onData = () => { if (output.includes('World Vinyl running at')) finish(); };
+    const onData = () => {
+      const address = /World Vinyl running at http:\/\/127\.0\.0\.1:(\d+)\r?\n/.exec(output);
+      if (address) finish(null, Number(address[1]));
+    };
     const onExit = () => finish(new Error('Backend exited\n' + output));
-    function finish(error) {
+    function finish(error, boundPort) {
       clearTimeout(timer);
       child.stdout.off('data', onData);
       child.off('exit', onExit);
-      error ? reject(error) : resolve();
+      error ? reject(error) : resolve(boundPort);
     }
     child.stdout.on('data', onData);
     child.once('exit', onExit);
@@ -109,9 +107,15 @@ async function startBackend(t, {
     remove(name) { fs.rmSync(path.join(root, name), { recursive: true, force: true }); },
     get output() { return output; },
     waitForRefresh: () => refreshDone,
-    request: (pathname, options = {}) => fetch('http://127.0.0.1:' + port + pathname, {
-      ...options, signal: AbortSignal.timeout(3000),
-    }),
+    async request(pathname, options = {}) {
+      try {
+        return await fetch('http://127.0.0.1:' + port + pathname, {
+          ...options, signal: AbortSignal.timeout(3000),
+        });
+      } catch (error) {
+        throw new Error(pathname + ': ' + (error.cause?.message || error.message) + '\n' + output, { cause: error });
+      }
+    },
     waitForOutput: (pattern) => new Promise((resolve, reject) => {
       const timer = setTimeout(() => finish(new Error('Missing backend output: ' + pattern + '\n' + output)), 5000);
       const check = () => { if (pattern.test(output)) finish(); };

@@ -46,10 +46,11 @@ test('server mode prepares four complete songs without visitors, and a visit use
   for(let i=0;i<3;i++)await backend.maintain();
   assert.equal(downloads.length,4,'healthy idle buffer must not trigger new downloads');
   const song=await(await backend.request('/api/song')).json();
-  assert.equal(song.countrycode,'US');
   assert.match(song.artwork,/^\/artwork\/\d+$/);
   const audio=await backend.request(song.streamUrl,{headers:{Range:'bytes=0-4'}});
   assert.equal(audio.status,206);assert.equal(await audio.text(),'whole');
+  const location = await (await backend.request('/api/country?id=' + song.id)).json();
+  assert.equal(location.countrycode, 'US');
   const image=await backend.request(song.artwork);assert.equal(image.headers.get('content-type'),'image/jpeg');assert.equal(await image.text(),'fixture-image');
   await waitBuffer(backend,b=>b.ready===4 && b.downloading===0);
   assert.equal(downloads.length,4,'legacy clients reuse the reserve without draining it');
