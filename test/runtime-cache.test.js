@@ -39,6 +39,9 @@ test('clearRuntimeCache removes runtime data but preserves config and the numeri
     fs.writeFileSync(path.join(root, 'artist-countries.json'), '{}');
     fs.writeFileSync(path.join(root, 'globe-CN.png'), 'runtime');
     fs.writeFileSync(path.join(root, 'config.json'), '{"jamendoClientId":"keep-me"}');
+    const libraryTrack = path.join(root, 'library', 'track.mp3');
+    fs.mkdirSync(path.dirname(libraryTrack));
+    fs.writeFileSync(libraryTrack, 'keep');
     const bounds = JSON.stringify({ maxId: 123456, checkedAt: Date.now() });
     fs.writeFileSync(path.join(root, 'catalog-bounds.json'), bounds);
 
@@ -52,6 +55,7 @@ test('clearRuntimeCache removes runtime data but preserves config and the numeri
     assert.equal(fs.existsSync(path.join(root, 'globe-CN.png')), false);
     assert.equal(fs.readFileSync(path.join(root, 'config.json'), 'utf8'), '{"jamendoClientId":"keep-me"}');
     assert.equal(fs.readFileSync(path.join(root, 'catalog-bounds.json'), 'utf8'), bounds);
+    assert.equal(fs.readFileSync(libraryTrack, 'utf8'), 'keep');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

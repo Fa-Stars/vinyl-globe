@@ -6,12 +6,13 @@ const vm = require('node:vm');
 
 async function flush() { for (let i = 0; i < 30; i++) await Promise.resolve(); }
 
-async function createPlayer({ songResponse, demo = false, playError, infoResponse, mapData, electronAPI } = {}) {
+async function createPlayer({ songResponse, sessionResponse, demo = false, reducedMotion = false, playError, infoResponse, mapData, mapResponse, capitalsResponse, countryResponse, electronAPI } = {}) {
   let now = 0;
   let timerId = 0;
   const timers = new Map();
   let animationFrame;
   let renderedFrames = 0;
+  let lastFrame = null;
   const schedule = (callback, ms, interval = false) => {
     const id = ++timerId;
     timers.set(id, { callback, at: now + ms, interval: interval ? ms : 0 });
@@ -28,6 +29,8 @@ async function createPlayer({ songResponse, demo = false, playError, infoRespons
       this.value = '';
       this.type = 'text';
       this.style = { setProperty() {} };
+      this.clientWidth = 320;
+      this.clientHeight = 320;
       this.attributes = new Map();
       const classes = new Set();
       this.classList = {
@@ -54,8 +57,8 @@ async function createPlayer({ songResponse, demo = false, playError, infoRespons
     closest() { return null; }
     getContext() {
       return {
-        createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }),
-        putImageData() { renderedFrames++; },
+        createImageData: (w, h) => ({ width: w, height: h, data: new Uint8ClampedArray(w * h * 4) }),
+        putImageData(frame) { renderedFrames++; lastFrame = frame; },
       };
     }
     emit(type) { this.dispatchEvent(new Event(type)); }
@@ -88,15 +91,21 @@ async function createPlayer({ songResponse, demo = false, playError, infoRespons
   const navigator = { onLine: true, sendBeacon: (url) => { beacons.push(url); return true; } };
   let songsRequested = 0;
   const requests = [];
+  const fetches = [];
   const response = (data, status = 200) => ({
     ok: status >= 200 && status < 300,
     status,
     json: async () => data,
   });
   const fetch = async (url, options = {}) => {
+    fetches.push({ url, signal: options.signal, headers:options.headers, body:options.body, method:options.method });
+    if (url === 'map.json' && mapResponse) return mapResponse(response, options.signal);
     if (url === 'map.json') return response(mapData || { w: 1, h: 1, grid: '..', names: {}, aliases: {} });
+    if (url === 'capitals.json' && capitalsResponse) return capitalsResponse(response, options.signal);
     if (url === 'capitals.json') return response({});
-    if (url === '/api/info') return infoResponse ? infoResponse(response) : response({ mode: 'jamendo', configured: true });
+    if (url === '/api/info') return infoResponse ? infoResponse(response, options.signal) : response({ mode: 'jamendo', configured: true });
+    if (url === '/api/listening-session') return sessionResponse ? sessionResponse(options,response) : response({token:'test-session-token'});
+    if (url.startsWith('/api/country?') && countryResponse) return countryResponse(url, options.signal, response);
     if (url === '/api/song') {
       const index = ++songsRequested;
       requests.push({ index, signal: options.signal, url });
@@ -115,12 +124,17 @@ async function createPlayer({ songResponse, demo = false, playError, infoRespons
     get src() { return this._src || ''; }
   }
   window.electronAPI = electronAPI;
-  const location = { search: demo ? '?demo=1' : '', reload() {} };
+  const motionPreference = new EventTarget();
+  motionPreference.matches = reducedMotion;
+  window.matchMedia = () => motionPreference;
+  let reloads = 0;
+  const location = { search: demo ? '?demo=1' : '', reload() { reloads++; } };
+  window.location = location;
   const context = vm.createContext({
     document: { getElementById: element, querySelector: element, activeElement: null },
     window, navigator, location,
     Image,
-    console, fetch, URL, URLSearchParams, AbortController,
+    console, fetch, URL, URLSearchParams, AbortController, AbortSignal,
     Date: class extends Date { static now() { return now; } },
     setTimeout: (fn, ms) => schedule(fn, ms), clearTimeout: (id) => timers.delete(id),
     setInterval: (fn, ms) => schedule(fn, ms, true), clearInterval: (id) => timers.delete(id),
@@ -129,7 +143,8 @@ async function createPlayer({ songResponse, demo = false, playError, infoRespons
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../web/public/app.js'), 'utf8'), context, { filename: 'app.js' });
   await flush();
   return {
-    element, audio: element('audio'), requests, beacons,
+    get reloads() { return reloads; },
+    element, audio: element('audio'), requests, fetches, beacons,
     get songsRequested() { return songsRequested; },
     get playbackMode() { return element('np-mode').textContent; },
     frame(timestamp, hidden = false) {
@@ -137,12 +152,39 @@ async function createPlayer({ songResponse, demo = false, playError, infoRespons
       animationFrame(timestamp);
     },
     get renderedFrames() { return renderedFrames; },
+    get lastFrame() {
+      return lastFrame && { width: lastFrame.width, height: lastFrame.height, data: new Uint8ClampedArray(lastFrame.data) };
+    },
+    focusCountry(code, timestamp = 250) {
+      if (!/^[A-Z]{2}$/.test(code)) throw new RangeError('Expected a two-letter country code');
+      if (!Number.isFinite(timestamp)) throw new TypeError('Frame time must be finite');
+      context.previewCountryCode = code;
+      context.previewFrameTime = timestamp;
+      try {
+        return vm.runInContext(`(() => {
+          setCountry(previewCountryCode);
+          if (targetRot === null) return null;
+          rot = targetRot; pitch = targetPitch; zoom = targetZoom;
+          drawGlobe(previewFrameTime);
+          return { code: highlightCode, rot, pitch, zoom, area: countryArea[highlightCode] || 0 };
+        })()`, context);
+      } finally {
+        delete context.previewCountryCode;
+        delete context.previewFrameTime;
+      }
+    },
     get globeRotation() { return vm.runInContext('rot', context); },
+    async reduceMotion(enabled) {
+      motionPreference.matches=enabled;
+      const event=new Event('change');Object.defineProperty(event,'matches',{value:enabled});
+      motionPreference.dispatchEvent(event);await flush();
+    },
     get title() { return element('np-station').textContent; },
     get status() { return element('np-status').textContent; },
     async click(id) { element(id).emit('click'); await flush(); },
     async media(type) { element('audio').emit(type); await flush(); },
     async network(online) { navigator.onLine = online; window.emit(online ? 'online' : 'offline'); await flush(); },
+    async pagehide(persisted=false) { const event=new Event('pagehide'); Object.defineProperty(event,'persisted',{value:persisted}); window.dispatchEvent(event); await flush(); },
     async tick(ms) {
       const until = now + ms;
       for (let count = 0; count < 100000; count++) {

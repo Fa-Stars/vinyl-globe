@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800">
+  <defs>
+    <linearGradient id="night" x2=".7" y2="1"><stop stop-color="#1b2834"/><stop offset="1" stop-color="#3d5261"/></linearGradient>
+    <linearGradient id="snow" x2="0" y2="1"><stop stop-color="#ecdec0"/><stop offset="1" stop-color="#b7b8a5"/></linearGradient>
+    <filter id="paper"><feTurbulence type="fractalNoise" baseFrequency=".62" numOctaves="3" stitchTiles="stitch"/><feColorMatrix type="saturate" values="0"/><feComponentTransfer><feFuncA type="linear" slope=".12"/></feComponentTransfer><feBlend in="SourceGraphic" mode="soft-light"/></filter>
+  </defs>
+  <g filter="url(#paper)">
+    <path fill="url(#night)" d="M0 0h800v800H0z"/>
+    <circle cx="214" cy="206" r="35" fill="#e4d5b5"/>
+    <path d="m-30 590 89-52 69 30 91-151 87 83 44-23 89 105 65-40 92-105 101 159 63-29 91 69v204H-30Z" fill="#c0c1b0"/>
+    <path d="m-30 590 89-52 69 30 91-151 87 83 44-23 89 105 65-40 92-105 101 159 63-29 91 69-152-14-74-67-46 31-32-43-46 50-75 23-74-44-46-29-38-56-37 53-40 26-37 67-52-30-46 23Z" fill="url(#snow)"/>
+    <path d="m142 562 77-145-19 89 25 11-34 21-6 43Z" fill="#445b69"/>
+    <path d="m282 528 24-28 44-23-12 54 17 50-35-15Z" fill="#62757a"/>
+    <path d="m504 542 92-105-24 88 27-6-5 38 31 11-56 23-36-29Z" fill="#526a77"/>
+    <path d="m0 665 91-39 96 49 91-45 93 50 121-60 102 53 97-32 109 66v93H0Z" fill="#354f62"/>
+    <path d="m0 702 96-29 91 39 91-27 91 26 122-36 103 38 97-26 109 40v73H0Z" fill="#c0bea9"/>
+    <path d="m0 749 85-17 112 29 120-28 114 22 107-29 105 28 157-27v73H0Z" fill="#1f374a"/>
+  </g>
+</svg>

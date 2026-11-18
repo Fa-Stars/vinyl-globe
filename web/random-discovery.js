@@ -17,6 +17,7 @@ function createDiscovery({ request, random = Math.random, now = Date.now, cached
   if (!validBounds(bounds)) bounds = null;
 
   async function refreshBounds() {
+    let lastError;
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const result = await request({ limit: '1', order: 'id_desc' });
@@ -26,10 +27,15 @@ function createDiscovery({ request, random = Math.random, now = Date.now, cached
           try { saveBounds(bounds); } catch { /* Cache failure must not block discovery. */ }
           return bounds;
         }
-      } catch { /* Never fall back to a chart or a hard-coded ID range. */ }
+      } catch (error) {
+        if (error.definitive) throw error;
+        lastError = error;
+      }
       if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 500));
     }
-    throw new Error('Catalog ID range unavailable');
+    const failure = new Error('Catalog ID range unavailable', { cause: lastError });
+    failure.code = lastError?.code || 'JAMENDO_DISCOVERY_UNAVAILABLE';
+    throw failure;
   }
 
   async function range() {
@@ -48,6 +54,7 @@ function createDiscovery({ request, random = Math.random, now = Date.now, cached
       const maxId = await range();
       const tracks = new Map();
       const attempted = new Set();
+      let lastError;
       for (let attempt = 0; attempt < 8 && tracks.size < size; attempt++) {
         // Oversample holes in the ID range, but keep every request below API limits.
         const count = Math.min(200, Math.max(16, (size - tracks.size) * 4), maxId);
@@ -60,7 +67,11 @@ function createDiscovery({ request, random = Math.random, now = Date.now, cached
         // Preserve the draw order rather than the API's popularity/ID sort order.
         let result;
         try { result = await request({ id: [...ids].join('+'), limit: String(ids.size) }); }
-        catch { continue; }
+        catch (error) {
+          if (error.definitive) throw error;
+          lastError = error;
+          continue;
+        }
         for (const id of ids) attempted.add(id);
         const found = new Map((result.results || []).map(track => [String(track.id), track]));
         const fresh = [];
@@ -80,7 +91,11 @@ function createDiscovery({ request, random = Math.random, now = Date.now, cached
         }
         if (fresh.length) onTracks(fresh);
       }
-      if (!tracks.size) throw new Error('Random discovery temporarily unavailable');
+      if (!tracks.size) {
+        const failure = new Error('Random discovery temporarily unavailable', { cause: lastError });
+        failure.code = lastError?.code || 'JAMENDO_DISCOVERY_UNAVAILABLE';
+        throw failure;
+      }
       return [...tracks.values()];
     },
   };

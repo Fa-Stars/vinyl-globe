@@ -51,6 +51,42 @@ test('a failed exact-ID batch is retryable without marking those IDs played', as
   assert.equal(calls,2);
 });
 
+test('a definitive boundary failure is preserved without three blind retries', async () => {
+  let calls = 0;
+  const failure = Object.assign(new Error('upstream rejected request'), { definitive: true, code: 'JAMENDO_UPSTREAM_ERROR' });
+  const d = createDiscovery({ request: async () => { calls++; throw failure; } });
+  await assert.rejects(d.sample(1), error => error === failure);
+  assert.equal(calls, 1);
+});
+
+test('a definitive exact-ID failure is preserved without eight blind retries', async () => {
+  let calls = 0;
+  const failure = Object.assign(new Error('upstream rejected request'), { definitive: true, code: 'JAMENDO_UPSTREAM_ERROR' });
+  const d = createDiscovery({ cachedBounds: bounds(1), random: () => 0,
+    request: async () => { calls++; throw failure; },
+  });
+  await assert.rejects(d.sample(1), error => error === failure);
+  assert.equal(calls, 1);
+});
+
+test('exhausted boundary retries preserve the safe network code and cause', async () => {
+  let calls = 0;
+  const failure = Object.assign(new Error('connection failed'), { code: 'JAMENDO_NETWORK_ERROR' });
+  const d = createDiscovery({ request: async () => { calls++; throw failure; } });
+  await assert.rejects(d.sample(1), error => error.code === failure.code && error.cause === failure);
+  assert.equal(calls, 3);
+});
+
+test('exhausted exact-ID retries preserve the upstream code and cause', async () => {
+  let calls = 0;
+  const failure = Object.assign(new Error('upstream unavailable'), { code: 'JAMENDO_UPSTREAM_ERROR' });
+  const d = createDiscovery({ cachedBounds: bounds(1), random: () => 0,
+    request: async () => { calls++; throw failure; },
+  });
+  await assert.rejects(d.sample(1), error => error.code === failure.code && error.cause === failure);
+  assert.equal(calls, 8);
+});
+
 test('missing catalog boundaries never silently become a fixed chart', async () => {
   const d = createDiscovery({ request: async () => ({ results: [] }) });
   await assert.rejects(d.sample(2), /Catalog ID range unavailable/);

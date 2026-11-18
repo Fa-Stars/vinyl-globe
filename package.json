@@ -12,8 +12,11 @@
     "dist": "electron-builder --win nsis portable"
   },
   "devDependencies": {
-    "electron": "^38.0.0",
-    "electron-builder": "^26.0.0"
+    "electron": "^45.3.4",
+    "electron-builder": "^26.18.0"
+  },
+  "overrides": {
+    "minimatch@>=7 <11.0.1": "11.0.9"
   },
   "build": {
     "appId": "com.worldvinyl.desktop",
@@ -30,6 +33,7 @@
       "web/public/index.html",
       "web/public/app.js",
       "web/public/style.css",
+      "web/public/record-sleeve.svg",
       "web/public/map.json",
       "web/public/capitals.json",
       "runtime-cache.js",
@@ -39,6 +43,10 @@
       "web/verified-artist-countries.json",
       "web/random-discovery.js",
       "web/jamendo-metadata.js",
+      "web/jamendo-fetch.js",
+      "web/jamendo-tls.js",
+      "web/artwork-cache.js",
+      "web/listening-sessions.js",
       "README.md",
       "!**/data/**",
       "!**/*.{mp3,m4a,aac,flac,wav,ogg,opus}",
@@ -53,7 +61,11 @@
       "web/jamendo-country-seed.json",
       "web/verified-artist-countries.json",
       "web/random-discovery.js",
-      "web/jamendo-metadata.js"
+      "web/jamendo-metadata.js",
+      "web/jamendo-fetch.js",
+      "web/jamendo-tls.js",
+      "web/artwork-cache.js",
+      "web/listening-sessions.js"
     ],
     "win": {
       "target": [

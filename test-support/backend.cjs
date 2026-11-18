@@ -18,6 +18,9 @@ async function startBackend(t, {
   setup,
   catalogMaxId = 800000,
   now,
+  audioTimeoutMs,
+  musicBrainzUpstream = false,
+  serverMode = false,
 } = {}) {
   const temp = fs.realpathSync(os.tmpdir());
   const root = fs.mkdtempSync(path.join(temp, 'vinyl-regression-'));
@@ -54,7 +57,10 @@ async function startBackend(t, {
       WORLD_VINYL_DATA_DIR: root,
       WORLD_VINYL_CLEAR_CACHE_ON_EXIT: '0',
       WORLD_VINYL_BROWSER_LIFECYCLE: '0',
+      WORLD_VINYL_SERVER_MODE: serverMode ? '1' : '0',
       WORLD_VINYL_TEST_UPSTREAM: 'http://127.0.0.1:' + remote.address().port,
+      WORLD_VINYL_TEST_MUSICBRAINZ_UPSTREAM: musicBrainzUpstream ? '1' : '0',
+      ...(Number.isFinite(audioTimeoutMs) ? { WORLD_VINYL_TEST_AUDIO_TIMEOUT_MS: String(audioTimeoutMs) } : {}),
       ...(Number.isFinite(now) ? { WORLD_VINYL_TEST_NOW: String(now) } : {}),
     },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
@@ -136,6 +142,11 @@ async function startBackend(t, {
       if (!Number.isFinite(value)) throw new TypeError('clock must be finite');
       finishClock = resolve;
       child.send({ type: 'clock', now: value });
+    }),
+    maintain: () => new Promise(resolve => {
+      const done = message => { if (message === 'maintenance-finished') { child.off('message', done); resolve(); } };
+      child.on('message', done);
+      child.send('maintenance');
     }),
   };
 }

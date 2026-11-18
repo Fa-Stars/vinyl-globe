@@ -13,6 +13,7 @@ let backend = null;
 let backendPort = null;
 let quitting = false;
 let runtimeCacheCleared = false;
+let settingsSaveInProgress = false;
 
 function appRoot() {
   // web/server.js 和 web/public/ 会在生产构建中放到 asarUnpack，便于子进程直接读取。
@@ -139,6 +140,7 @@ function stopBackend() {
 
 async function startBackend(portOverride) {
   const port = portOverride || await findFreePort();
+  if (quitting) throw new Error('程序正在退出');
   const script = path.join(appRoot(), 'web', 'server.js');
   const env = {
     ...process.env,
@@ -199,10 +201,15 @@ function settingsForUi() {
 function registerIpc() {
   ipcMain.handle('settings:get', () => settingsForUi());
   ipcMain.handle('settings:save', async (_event, value) => {
+    if (quitting) return { ok: false, error: '程序正在退出，请重新启动后再保存设置' };
+    // A save includes stopping, starting, and possibly restoring the backend.
+    // Do not let a second request overwrite its config or launch another child.
+    if (settingsSaveInProgress) return { ok: false, error: '正在保存设置，请稍后重试' };
     const id = normalizeClientId(value);
     if (id === null) return { ok: false, error: 'client_id 格式不正确' };
     const previous = normalizeClientId(readConfig().jamendoClientId) || '';
     if (id === previous) return { ok: true, changed: false, mode: id ? 'jamendo' : 'setup-required', configured: Boolean(id) };
+    settingsSaveInProgress = true;
     try {
       writeConfig(id);
       await restartBackend();
@@ -210,11 +217,13 @@ function registerIpc() {
     } catch (error) {
       try {
         writeConfig(previous);
-        await restartBackend();
+        if (!quitting) await restartBackend();
       } catch (restoreError) {
         console.error('[settings] restore failed:', restoreError);
       }
       return { ok: false, error: error.message || '保存设置失败' };
+    } finally {
+      settingsSaveInProgress = false;
     }
   });
   ipcMain.handle('app:open-external', (_event, url) => {

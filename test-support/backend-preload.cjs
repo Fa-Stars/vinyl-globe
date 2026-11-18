@@ -19,10 +19,11 @@ const fetchRemote = global.fetch;
 global.fetch = (input, options) => {
   const url = new URL(input);
   if (url.hostname === '127.0.0.1') return fetchRemote(input, options);
-  if (url.hostname === 'musicbrainz.org') {
+  const musicBrainz = url.hostname === 'musicbrainz.org';
+  if (musicBrainz && process.env.WORLD_VINYL_TEST_MUSICBRAINZ_UPSTREAM !== '1') {
     return Promise.resolve(new Response(JSON.stringify({ artists: [] })));
   }
-  if (url.hostname !== 'api.jamendo.com') {
+  if (url.hostname !== 'api.jamendo.com' && !musicBrainz) {
     return Promise.reject(new Error('Unexpected external request in test'));
   }
   const target = new URL(process.env.WORLD_VINYL_TEST_UPSTREAM);
@@ -34,15 +35,26 @@ global.fetch = (input, options) => {
 };
 
 const interval = global.setInterval;
+// Exercise the production audio timeout without a minute-long regression test.
+// Only test child processes opt into this accelerated timeout.
+const audioTimeoutMs = Number(process.env.WORLD_VINYL_TEST_AUDIO_TIMEOUT_MS);
+if (Number.isFinite(audioTimeoutMs) && audioTimeoutMs > 0) {
+  const timeout = global.setTimeout;
+  global.setTimeout = (callback, ms, ...args) =>
+    timeout(callback, ms === 60000 ? audioTimeoutMs : ms, ...args);
+}
 let refresh;
+let maintenance;
 let testNow = Number(process.env.WORLD_VINYL_TEST_NOW);
 if (Number.isFinite(testNow)) Date.now = () => testNow;
 global.setInterval = (callback, ms, ...args) => {
+  if (ms === 60000 && process.env.WORLD_VINYL_SERVER_MODE === '1') { maintenance = callback; return { unref() {} }; }
   if (ms !== 12 * 3600 * 1000) return interval(callback, ms, ...args);
   refresh = callback;
   return { unref() {} };
 };
 process.on('message', (message) => {
+  if (message === 'maintenance' && maintenance) { Promise.resolve(maintenance()).then(() => process.send('maintenance-finished')); return; }
   if (message && message.type === 'clock' && Number.isFinite(message.now)) {
     testNow = message.now;
     Date.now = () => testNow;

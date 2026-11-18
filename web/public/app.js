@@ -12,6 +12,10 @@ const el = (id) => document.getElementById(id);
 const npStation = el('np-station');
 const npCountry = el('np-country');
 const npMeta = el('np-meta');
+const npArtist = el('np-artist');
+const transportTitle = el('transport-title');
+const transportArtist = el('transport-artist');
+const transportArtwork = el('transport-artwork');
 const npStatus = el('np-status');
 const npProgress = el('np-progress');
 const npProgressFill = el('np-progress-fill');
@@ -24,6 +28,8 @@ const npSourceLink = el('np-source-link');
 const npLicenseLink = el('np-license-link');
 const npRightsNote = el('np-rights-note');
 const globeCountry = el('globe-country');
+const globeCountryCode = el('globe-country-code');
+const globeLocationStatus = el('globe-location-status');
 const globeHint = el('globe-hint');
 const globeLat = el('globe-lat');
 const globeLon = el('globe-lon');
@@ -69,9 +75,16 @@ let targetRot = null;     // 要转到的国家经度（null = 空闲自转）
 let trackNumber = 0;
 let nextRequest = 0;
 let sourceMode = 'jamendo';
+let serverStandby = false;
+let personalQueues = false;
+let listeningToken = '';
+let listeningConnect = null;
+let listeningHeartbeat = null;
+let listeningSequence = 0;
 let setupRequired = false;
 let settingsReturnFocus = null;
 let settingsGeneration = 0;
+let settingsSaving = false;
 
 const JAMENDO_HOSTS = new Set(['jamendo.com', 'www.jamendo.com']);
 const CREATIVE_COMMONS_HOST = 'creativecommons.org';
@@ -86,6 +99,19 @@ const SETUP_REQUIRED_MESSAGE = '需要配置 Jamendo client_id · 请在设置�
 // 首次初始化在线编号范围可能较慢；后续切歌无需等待整首音频或地区解析。
 const SONG_REQUEST_TIMEOUT_MS = 45000;
 const SONG_CANDIDATE_TTL_MS = 15 * 60 * 1000;
+const APP_INFO_TIMEOUT_MS = 3000;
+const GLOBE_RESOURCE_TIMEOUT_MS = 15000;
+const COUNTRY_REQUEST_TIMEOUT_MS = 5000;
+const SONG_FETCH_ERRORS = new Map([
+  ['SESSION_CAPACITY', '当前使用人数较多，请稍后重试'],
+  ['SESSION_RATE_LIMIT', '连接过于频繁，请稍后重试'],
+  ['SONG_RATE_LIMIT', '切歌过于频繁，请稍后重试'],
+  ['SONG_REQUEST_PENDING', '正在准备下一首，请稍候'],
+  ['BUFFER_PREPARING', '正在准备歌曲，请稍后重试'],
+  ['JAMENDO_NETWORK_ERROR', '暂时连接不上 Jamendo，请检查网络、DNS 或代理后重试'],
+  ['JAMENDO_UPSTREAM_ERROR', 'Jamendo 服务暂时无法返回歌曲，请稍后重试'],
+  ['JAMENDO_DISCOVERY_UNAVAILABLE', '暂时没有发现可播放的新歌曲，请稍后重试'],
+]);
 
 // 地图呈现归属：保留原始网格编码，但在界面上作为同一显示区域处理。
 const DISPLAY_CODE_ALIASES = { TW: 'CN' };
@@ -110,7 +136,7 @@ function browserSessionUrl(state) {
 }
 
 function sendBrowserSession(state, beacon) {
-  if (!browserSessionId) return;
+  if (!browserSessionId || serverStandby) return;
   const url = browserSessionUrl(state);
   if (beacon && navigator.sendBeacon) {
     navigator.sendBeacon(url);
@@ -131,16 +157,56 @@ function startBrowserSession() {
   }, { once: true });
 }
 
+async function ensureListeningSession() {
+  if (!personalQueues || listeningToken) return listeningToken;
+  if (!listeningConnect) listeningConnect = (async () => {
+    const controller=new AbortController();
+    const timer=setTimeout(()=>controller.abort(),5000);
+    try {
+      const response=await fetch('/api/listening-session',{method:'POST',signal:controller.signal,cache:'no-store'});
+      const data=await response.json();
+      if (!response.ok || typeof data.token!=='string') {
+        const error=new Error(SONG_FETCH_ERRORS.get(data.code) || '暂时无法建立播放连接，请稍后重试'); error.code=data.code; throw error;
+      }
+      listeningToken=data.token; listeningSequence=0;
+      return listeningToken;
+    } finally { clearTimeout(timer); }
+  })().finally(()=>{listeningConnect=null;});
+  return listeningConnect;
+}
+
+function sendListeningState(disconnect = false) {
+  if (!personalQueues || !listeningToken) return;
+  const token=listeningToken;
+  const body=JSON.stringify({token,state:disconnect?'disconnect':'heartbeat',
+    playing:started && !audio.paused,id:current?.id});
+  if (disconnect && navigator.sendBeacon && navigator.sendBeacon('/api/listening-session',body)) return;
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),5000);
+  fetch('/api/listening-session',{method:'POST',body,keepalive:true,cache:'no-store',signal:controller.signal})
+    .then(response=>{ if (response.status===401 && listeningToken===token) listeningToken=''; })
+    .catch(()=>{}).finally(()=>clearTimeout(timer));
+}
+
+function startListeningSession() {
+  if (listeningHeartbeat) return;
+  ensureListeningSession().then(()=>sendListeningState()).catch(()=>{});
+  listeningHeartbeat=setInterval(()=>{
+    if (!listeningToken) ensureListeningSession().then(()=>sendListeningState()).catch(()=>{});
+    else sendListeningState();
+  },20000);
+  // Hidden pages can still be playing. Server activity follows playback, not visibility.
+  audio.addEventListener('playing',()=>sendListeningState());
+  audio.addEventListener('pause',()=>sendListeningState());
+  window.addEventListener('pagehide',event=>{
+    if (!event.persisted) { clearInterval(listeningHeartbeat); sendListeningState(true); }
+  });
+}
+
 /* ---------------- 工具 ---------------- */
 function codeToFlag(code) {
   if (!/^[A-Z]{2}$/.test(code)) return '🌐';
   return Array.from(code).map((c) => String.fromCodePoint(127397 + c.charCodeAt(0))).join('');
-}
-
-function hashHue(str) {
-  let h = 0;
-  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) >>> 0;
-  return h % 360;
 }
 
 function setStatus(text) { npStatus.textContent = text; }
@@ -257,7 +323,7 @@ function updateSourceLabels(mode, configured) {
   // state for this page even if an earlier /api/info request arrives late.
   else if (!setupRequired && (mode === 'jamendo' || mode == null)) setupRequired = false;
   sourceMode = setupRequired ? 'setup-required' : 'jamendo';
-  headerStatusText.textContent = setupRequired ? 'SETUP REQUIRED · JAMENDO' : 'FULL TRACKS · JAMENDO';
+  updateHeaderStatus();
   npMode.textContent = setupRequired ? 'SETUP REQUIRED' : 'JAMENDO FULL TRACK';
   sourceLink.textContent = 'Jamendo';
   sourceLink.href = 'https://www.jamendo.com';
@@ -272,6 +338,9 @@ function setSettingsStatus(text, isError) {
 }
 
 function closeSettings() {
+  // Saving restarts the local service. Keep the dialog attached until the
+  // result is known, otherwise a successful save can leave a stale setup page.
+  if (settingsSaving) return;
   settingsGeneration++;
   settingsModal.hidden = true;
   settingsSave.disabled = false;
@@ -284,6 +353,7 @@ function closeSettings() {
 }
 
 async function openSettings() {
+  if (settingsSaving) return;
   const generation = ++settingsGeneration;
   settingsReturnFocus = document.activeElement;
   settingsModal.hidden = false;
@@ -323,13 +393,19 @@ async function openSettings() {
 }
 
 async function saveSettings() {
-  if (!window.electronAPI) return;
+  if (!window.electronAPI || settingsSaving) return;
+  const generation = settingsGeneration;
+  settingsSaving = true;
+  let reloading = false;
+  settingsClose.disabled = true;
+  settingsClientId.disabled = true;
   settingsSave.disabled = true;
   settingsCancel.disabled = true;
   settingsToggleKey.disabled = true;
   setSettingsStatus('正在保存并重启本地服务，请稍候…');
   try {
     const result = await window.electronAPI.saveJamendoClientId(settingsClientId.value);
+    if (generation !== settingsGeneration) return;
     if (!result || !result.ok) {
       setSettingsStatus((result && result.error) || '保存失败，请重试。', true);
       settingsSave.disabled = false;
@@ -338,12 +414,22 @@ async function saveSettings() {
       return;
     }
     setSettingsStatus(result.mode === 'jamendo' ? '已切换到 Jamendo 全曲模式，正在刷新…' : '已停用播放，正在刷新设置状态…');
-    setTimeout(() => window.location.reload(), 350);
+    reloading = true;
+    setTimeout(() => {
+      if (generation === settingsGeneration) window.location.reload();
+    }, 350);
   } catch (error) {
+    if (generation !== settingsGeneration) return;
     setSettingsStatus('保存失败，请重试。', true);
     settingsSave.disabled = false;
     settingsCancel.disabled = false;
     settingsToggleKey.disabled = false;
+  } finally {
+    if (!reloading) {
+      settingsSaving = false;
+      settingsClose.disabled = false;
+      settingsClientId.disabled = false;
+    }
   }
 }
 
@@ -400,19 +486,33 @@ function clearPlaybackTimers() {
 
 function setPlaybackState(state, message) {
   playbackState = state;
+  updateHeaderStatus();
   setPlayingUI(state === 'playing');
   const badge = {
-    loading: 'SEARCHING', buffering: 'BUFFERING', retrying: 'RETRYING',
-    offline: 'OFFLINE', error: 'STOPPED', 'setup-required': 'SETUP REQUIRED',
+    loading: '正在寻找下一首', buffering: '正在缓冲', retrying: '正在重试',
+    offline: '网络已断开', error: '播放已停止', 'setup-required': '请先配置播放',
   }[state];
   if (badge) setDeckBadge(badge, 'loading');
   btnPlay.textContent = started ? '⏸' : '▶';
   btnPlay.setAttribute('aria-label', started ? '暂停' : '播放');
   btnPlay.setAttribute('aria-pressed', String(started));
+  record.setAttribute('aria-label', started ? '暂停唱片' : '播放唱片');
+  record.setAttribute('aria-pressed', String(started));
   if (state === 'setup-required') deckTipCopy.textContent = '请先配置 Jamendo client_id · 打开播放设置';
   else if (started && state !== 'playing') deckTipCopy.textContent = '正在准备播放 · 点击唱片暂停';
   else if (state === 'ready') deckTipCopy.textContent = '点击唱片或按空格开始播放';
   if (message) setStatus(message);
+}
+
+function updateHeaderStatus() {
+  const state = setupRequired ? 'setup-required' : playbackState;
+  headerStatusText.textContent = {
+    playing: '正在播放', paused: '已暂停', ready: '准备就绪',
+    loading: '正在选歌', buffering: '正在缓冲', retrying: '正在重试',
+    offline: '网络已断开', error: '播放已停止', blocked: '点击开始播放',
+    ended: '即将播放下一首', 'setup-required': '需要配置播放',
+  }[state] || '准备音乐中';
+  el('header-status').dataset.state = state;
 }
 
 function stopPlayback(state, message) {
@@ -447,15 +547,15 @@ function requestPlayback() {
 
 function setPlayingUI(on) {
   deck.classList.toggle('playing', on);
-  ledText.textContent = on ? 'ON AIR' : 'STANDBY';
+  ledText.textContent = on ? '正在播放' : '静候下一段旋律';
   btnPlay.textContent = on ? '⏸' : '▶';
   btnPlay.setAttribute('aria-label', on ? '暂停' : '播放');
   btnPlay.setAttribute('aria-pressed', String(on));
   if (on) {
-    setDeckBadge('ON AIR', 'live');
+    setDeckBadge('正在播放', 'live');
     deckTipCopy.textContent = '正在播放 · 点击唱片暂停';
   } else if (current) {
-    setDeckBadge('READY TO PLAY');
+    setDeckBadge('准备就绪');
     deckTipCopy.textContent = '点击唱片或按空格继续播放';
   }
 }
@@ -490,7 +590,7 @@ function autoSkip(reason) {
   skipCount++;
   if (skipCount >= 8) {
     stopPlayback('error');
-    setStatus('连续失败，请稍后重试（或再按 R）');
+    setStatus('连续失败，已停止自动重试 · ' + reason);
     return;
   }
   setPlaybackState('retrying', reason);
@@ -537,6 +637,11 @@ function releaseSongAudio(song) {
   const playedId = song.id;
   if (playedId) {
     const url = '/api/audio/played?id=' + encodeURIComponent(String(playedId));
+    if (personalQueues) {
+      if (listeningToken) fetch(url,{method:'POST',headers:{'X-Vinyl-Session':listeningToken},
+        keepalive:true,cache:'no-store',signal:AbortSignal.timeout(5000)}).catch(()=>{});
+      return;
+    }
     if (!navigator.sendBeacon || !navigator.sendBeacon(url)) {
       fetch(url, { method: 'POST', keepalive: true, cache: 'no-store' }).catch(() => {});
     }
@@ -561,15 +666,37 @@ function fetchSong() {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), SONG_REQUEST_TIMEOUT_MS);
   const promise = (async () => {
-    const r = await fetch('/api/song', { signal: controller.signal, cache: 'no-store' });
+    let r;
+    for (let attempt=0;attempt<2;attempt++) {
+      let headers;
+      if (personalQueues) {
+        const token=await ensureListeningSession();
+        if (controller.signal.aborted) throw new Error('Song request cancelled');
+        headers={'X-Vinyl-Session':token,'X-Vinyl-Sequence':String(++listeningSequence)};
+      }
+      r=await fetch('/api/song',{signal:controller.signal,cache:'no-store',...(headers?{headers}:{})});
+      if (personalQueues && r.status===401 && attempt===0) {
+        if (listeningToken===headers['X-Vinyl-Session']) listeningToken='';
+        continue;
+      }
+      break;
+    }
     if (!r.ok) {
-      if (r.status === 503) {
+      if (personalQueues && r.status===401) listeningToken='';
+      if ([401,409,429,503].includes(r.status)) {
         let detail = null;
         try { detail = await r.json(); } catch (error) { /* use the generic setup message */ }
         if (detail && detail.code === 'JAMENDO_SETUP_REQUIRED') {
           const setupError = new Error(setupMessage(detail.error));
           setupError.code = detail.code;
           throw setupError;
+        }
+        if (detail && SONG_FETCH_ERRORS.has(detail.code)) {
+          // Only display our own copy. Upstream errors can contain URLs or
+          // credentials and must never be reflected into the player.
+          const error = new Error(SONG_FETCH_ERRORS.get(detail.code));
+          error.code = detail.code;
+          throw error;
         }
       }
       throw new Error('api ' + r.status);
@@ -671,7 +798,7 @@ async function awaitFreshSong(task, request) {
 }
 
 function prefetch() {
-  if (setupRequired || sourceMode !== 'jamendo' || fetching || nextSong) return;
+  if (serverStandby || setupRequired || sourceMode !== 'jamendo' || fetching || nextSong) return;
   const task = fetchSong();
   fetching = task;
   task.promise
@@ -696,11 +823,14 @@ function prefetch() {
 // 歌曲开始后，异步解析艺术家国籍并点亮地球仪（未解析到时轮询）
 let countryPollTimer = null;
 let countryPollGeneration = 0;
+let countryPollController = null;
 
 function invalidateCountryPoll() {
   countryPollGeneration++;
   clearTimeout(countryPollTimer);
   countryPollTimer = null;
+  if (countryPollController) countryPollController.abort();
+  countryPollController = null;
 }
 
 function pollCountry(id) {
@@ -709,26 +839,36 @@ function pollCountry(id) {
   const songId = String(id);
   const isActive = () =>
     generation === countryPollGeneration && current && String(current.id) === songId;
-  (async () => {
-    for (let i = 0; i < 10; i++) {
+  let attempts = 0;
+  const lookup = async () => {
+    if (!isActive()) return;
+    const controller = new AbortController();
+    countryPollController = controller;
+    const timeout = setTimeout(() => controller.abort(), COUNTRY_REQUEST_TIMEOUT_MS);
+    try {
+      const r = await fetch('/api/country?id=' + encodeURIComponent(id), {
+        signal: controller.signal, cache: 'no-store',
+      });
       if (!isActive()) return;
-      try {
-        const r = await fetch('/api/country?id=' + encodeURIComponent(id));
-        if (!r.ok) break;
-        const j = await r.json();
-        if (!isActive()) return;
-        if (j.id != null && String(j.id) !== songId) return;
-        if (j.countrycode) { applyCountry(j, songId); return; }
-        if (j.status === 'none') {
-          applyCountry(j, songId);
-          return;
-        }
-      } catch (e) { /* 网络错误：稍后重试 */ }
+      if (!r.ok) { setCountry(null, '未知地区'); return; }
+      const j = await r.json();
       if (!isActive()) return;
-      await new Promise((r) => setTimeout(r, 2500));
+      if (controller.signal.aborted) throw new Error('country request timed out');
+      if (j.id != null && String(j.id) !== songId) return;
+      if (j.countrycode || j.status === 'none') { applyCountry(j, songId); return; }
+    } catch (e) { /* 网络错误或超时：仅当前歌曲稍后重试 */ }
+    finally {
+      clearTimeout(timeout);
+      if (countryPollController === controller) countryPollController = null;
     }
-    if (isActive()) setCountry(null, '未知地区');
-  })();
+    if (!isActive()) return;
+    if (++attempts >= 10) { setCountry(null, '未知地区'); return; }
+    countryPollTimer = setTimeout(() => {
+      countryPollTimer = null;
+      lookup();
+    }, 2500);
+  };
+  lookup();
 }
 
 function applyCountry(j, expectedId) {
@@ -767,19 +907,22 @@ function setCountry(code, displayName) {
   const name = (code && DISPLAY_NAMES[code]) || displayName || (code && map.names[code]) || '未知地区';
   const flag = codeToFlag(code);
   npCountry.textContent = flag + ' ' + name;
-  globeCountry.textContent = flag + ' ' + name;
+  globeCountry.textContent = name;
+  globeCountryCode.textContent = code || '—';
   const cap = code && capitals[code];
   const lat = cap ? cap[0] : (code ? countryLat[code] : undefined);
   const lon = cap ? cap[1] : (code ? countryLon[code] : undefined);
   globeLat.textContent = fmtCoordinate(lat, 'N', 'S');
   globeLon.textContent = fmtCoordinate(lon, 'E', 'W');
   const pending = !code && displayName === '正在定位…';
+  globeLocationStatus.textContent = code ? '已定位' : pending ? '正在定位' : '未知地区';
+  globeLocationStatus.dataset.state = code ? 'resolved' : pending ? 'pending' : 'unknown';
   globeHint.textContent = code
-    ? 'SIGNAL LOCKED · 已锁定'
-    : pending ? 'LOOKUP IN PROGRESS · 正在解析' : 'NO VERIFIED DATA · 暂无可信资料';
+    ? '艺人来源或活动地区'
+    : pending ? '正在查询艺人地区' : '暂无可信地区资料';
   globeSignalCopy.textContent = code
-    ? code + ' // TRACKING'
-    : pending ? 'LOOKUP IN PROGRESS' : 'NO COUNTRY DATA';
+    ? '已定位 · ' + code
+    : pending ? '正在定位' : '未知地区';
   globePinCountry.textContent = code ? flag + ' ' + name : '——';
   globePin.classList.toggle('is-visible', Boolean(code));
   return code;
@@ -795,6 +938,9 @@ function setSong(s) {
   setCountry(s.countrycode, s.countrycode ? s.country : '正在定位…');
 
   npStation.textContent = s.title;
+  npArtist.textContent = s.artist || '未知艺人';
+  transportTitle.textContent = s.title;
+  transportArtist.textContent = s.artist || '未知艺人';
   npMeta.textContent = [s.artist, s.album, fmtDuration(s.duration)].filter(Boolean).join(' · ');
   npProgressFill.style.width = '0%';
   npProgress.setAttribute('aria-valuenow', '0');
@@ -809,10 +955,9 @@ function setSong(s) {
   if (s.artwork) {
     recordArtwork = 'url("' + artworkUrlFor(s.artwork) + '")';
   } else {
-    const hue = hashHue(s.title + s.artist);
-    recordArtwork =
-      'radial-gradient(circle at 32% 30%, hsl(' + hue + ', 72%, 62%), hsl(' + hue + ', 70%, 42%) 70%)';
+    recordArtwork = 'url("record-sleeve.svg")';
   }
+  transportArtwork.style.backgroundImage = recordArtwork;
   record.style.setProperty('--record-artwork', recordArtwork);
   label.style.setProperty('--record-artwork', recordArtwork);
   if (s.artwork) {
@@ -821,6 +966,7 @@ function setSong(s) {
       const artwork = 'url("' + resolvedUrl + '")';
       record.style.setProperty('--record-artwork', artwork);
       label.style.setProperty('--record-artwork', artwork);
+      transportArtwork.style.backgroundImage = artwork;
     });
   }
   labelTitle.textContent = s.title;
@@ -864,6 +1010,10 @@ async function next(reason = 'manual') {
     } catch (e) {
       if (request === nextRequest) {
         if (e && e.code === 'JAMENDO_SETUP_REQUIRED') showSetupRequired(e.message);
+        else if (e && SONG_FETCH_ERRORS.has(e.code)) {
+          if (started) autoSkip(e.message);
+          else setPlaybackState('error', e.message);
+        }
         else if (started) autoSkip('获取歌曲失败，正在重试…');
         else setPlaybackState(navigator.onLine === false ? 'offline' : 'error', '获取歌曲失败或超时 · 点击播放重试');
       }
@@ -889,30 +1039,24 @@ const GCX = 160, GCY = 160;        // 球心
 const GR = 136;                    // 球半径（缩放前）
 const ZOOM_MIN = 1, ZOOM_MAX = 1.14; // 保留全球语境，视觉焦点交给信号 pin
 
-// 夜航控制台配色：深海蓝 + 低饱和陆地 + 琥珀定位信号
+// 暖白唱片室：纸白海洋、墨绿陆地与黄铜定位点。
 const PAL = {
-  skyBands: [[4, 12, 23], [5, 20, 34], [7, 31, 45], [10, 43, 52], [13, 55, 57]],
-  rim: [53, 148, 140],
-  star: [170, 224, 196],
-  seaDeep: [3, 18, 34],
-  seaMid: [5, 42, 61],
-  seaLit: [13, 84, 96],
-  seaGrid: [24, 89, 98],
-  seaTexture: [16, 61, 73],
-  coast: [91, 165, 139],
-  countryLine: [21, 78, 70],
-  landDark: [21, 56, 53],
-  land: [46, 108, 88],
-  landLit: [96, 164, 122],
-  landTexture: [68, 133, 103],
-  landGrid: [34, 91, 78],
-  hiA: [255, 196, 80],
-  hiB: [255, 240, 174],
-  hiEdge: [255, 141, 77],
-  flagRed: [255, 108, 92],
-  pole: [226, 244, 211],
-  poleDark: [79, 111, 104],
-  markerGlow: [255, 206, 106],
+  paper: [245, 242, 234],
+  rim: [169, 183, 162],
+  seaGrid: [187, 199, 177],
+  coast: [59, 91, 72],
+  countryLine: [90, 119, 96],
+  landDark: [67, 94, 76],
+  land: [63, 102, 79],
+  landLit: [69, 108, 83],
+  landTexture: [86, 119, 94],
+  landGrid: [97, 125, 101],
+  hiA: [172, 133, 84],
+  hiB: [182, 147, 98],
+  hiEdge: [148, 108, 64],
+  flagRed: [168, 124, 72],
+  poleDark: [75, 95, 77],
+  markerGlow: [185, 145, 91],
 };
 
 let backdrop = null;   // 静态背景（梦幻天空+柔光+星空）
@@ -1017,40 +1161,15 @@ function edgeHit(mask, fx, fy) {
     ((mask & 8) && fy < .42);
 }
 
-// 静态背景：深空色带 + 球体边缘细描边 + 低亮度星点
+// 静态纸白背景只生成一次，帧缓冲重复使用。
 function buildBackdrop() {
   backdrop = gctx.createImageData(GW, GH);
   const d = backdrop.data;
-  // 天空：分段色带保留像素感，但降低饱和度以衬托定位信号
-  const bands = PAL.skyBands;
-  const bandH = GH / bands.length;
   for (let y = 0; y < GH; y++) {
-    const b = Math.min(bands.length - 1, Math.floor(y / bandH));
-    const c = bands[b];
     for (let x = 0; x < GW; x++) {
       const i = (y * GW + x) * 4;
-      d[i] = c[0]; d[i + 1] = c[1]; d[i + 2] = c[2]; d[i + 3] = 255;
+      d[i] = PAL.paper[0]; d[i + 1] = PAL.paper[1]; d[i + 2] = PAL.paper[2]; d[i + 3] = 255;
     }
-  }
-  // 球体边缘：青绿色细线，替代旧版突兀的纯蓝边框
-  for (let y = 0; y < GH; y++) {
-    for (let x = 0; x < GW; x++) {
-      const dist = Math.hypot(x - GCX, y - GCY);
-      if (dist > GR + 3 && dist < GR + 6) blendPx(d, x, y, PAL.rim, .16);
-      if (dist > GR && dist <= GR + 3) {
-        const i = (y * GW + x) * 4;
-        d[i] = PAL.rim[0]; d[i + 1] = PAL.rim[1]; d[i + 2] = PAL.rim[2]; d[i + 3] = 255;
-      }
-    }
-  }
-  // 星点：确定性分布，避免每帧闪烁
-  let seed = 987654321;
-  const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
-  for (let i = 0; i < 86; i++) {
-    const x = (rnd() * GW) | 0;
-    const y = (rnd() * GH) | 0;
-    if (Math.hypot(x - GCX, y - GCY) < GR + 8) continue;
-    setPx(d, x, y, PAL.star);
   }
 }
 
@@ -1066,6 +1185,56 @@ function countryScreenPos(latDeg, lonDeg) {
   const dz = -dy2 * Math.sin(p) + dz2 * Math.cos(p);
   const Rz = GR * zoom;
   return { x: GCX + dx * Rz, y: GCY + dy * Rz, visible: dz > 0.05 };
+}
+
+// Selected preview: ripple, standard speed. Rings follow the sphere rather
+// than sliding across the screen; the actual geographic marker stays fixed.
+const GLOBE_RIPPLE_MS = 3600;
+const GLOBE_RIPPLE_COUNT = 3;
+const SIGNAL_AMBER = [224, 159, 72];
+const SIGNAL_RING = [207, 146, 66];
+
+function countryRippleColor(now, lat, lon, originLat, originLon, edge) {
+  if (!Number.isFinite(originLat) || !Number.isFinite(originLon)) return PAL.hiB;
+  const a = lat * Math.PI / 180, b = originLat * Math.PI / 180;
+  const distance = Math.acos(Math.max(-1, Math.min(1,
+    Math.sin(a) * Math.sin(b) + Math.cos(a) * Math.cos(b) * Math.cos((lon - originLon) * Math.PI / 180))));
+  const wave = .5 + .5 * Math.cos(distance * 31 - now / 610);
+  const strength = .24 + .71 * Math.pow(wave, 5);
+  const base = edge ? [143, 111, 65] : [158, 130, 79];
+  return base.map((value, i) => Math.round(value + ([239, 182, 94][i] - value) * strength));
+}
+
+function drawCountryRipple(d, pos, latDeg, lonDeg, now) {
+  const mx = Math.round(pos.x), my = Math.round(pos.y);
+  // A restrained glow underneath the pixel rings keeps the paper background.
+  const glowRadius = 20;
+  for (let y = -glowRadius; y <= glowRadius; y++) {
+    for (let x = -glowRadius; x <= glowRadius; x++) {
+      const radius2 = (x * x + y * y) / (glowRadius * glowRadius);
+      if (radius2 < 1) blendPx(d, mx + x, my + y, SIGNAL_AMBER, .24 * Math.pow(1 - radius2, 2));
+    }
+  }
+  const lat0 = latDeg * Math.PI / 180, lon0 = lonDeg * Math.PI / 180;
+  const sinLat = Math.sin(lat0), cosLat = Math.cos(lat0);
+  for (let ring = 0; ring < GLOBE_RIPPLE_COUNT; ring++) {
+    const phase = (now / GLOBE_RIPPLE_MS + ring / GLOBE_RIPPLE_COUNT) % 1;
+    const radius = .045 + phase * .40;
+    const sinRadius = Math.sin(radius), cosRadius = Math.cos(radius);
+    const alpha = .78 * Math.pow(1 - phase, 1.5);
+    for (let point = 0; point < 112; point++) {
+      if (point % 4 === 3) continue; // Deliberately dotted, like the map itself.
+      const bearing = point / 112 * Math.PI * 2;
+      const lat = Math.asin(Math.max(-1, Math.min(1,
+        sinLat * cosRadius + cosLat * sinRadius * Math.cos(bearing))));
+      const lon = lon0 + Math.atan2(Math.sin(bearing) * sinRadius * cosLat,
+        cosRadius - sinLat * Math.sin(lat));
+      const projected = countryScreenPos(lat * 180 / Math.PI, lon * 180 / Math.PI);
+      if (projected.visible) blendPx(d, Math.round(projected.x), Math.round(projected.y), SIGNAL_RING, alpha);
+    }
+  }
+  for (let y = -1; y <= 1; y++) for (let x = -1; x <= 1; x++) blendPx(d, mx + x, my + y, [242, 183, 92], .85);
+  setPx(d, mx, my, [255, 234, 183]);
 }
 
 function positionGlobePin(pos) {
@@ -1094,20 +1263,21 @@ function drawGlobe(now) {
     return;
   }
 
-  const pulse = 0.5 + 0.5 * Math.sin(now / 150);
-  const hiCol = pulse > 0.5 ? PAL.hiA : PAL.hiB;
+  const capital = highlightCode && capitals[highlightCode];
+  const originLat = capital ? capital[0] : countryLat[highlightCode];
+  const originLon = capital ? capital[1] : countryLon[highlightCode];
   const W = map.w, H = map.h, grid = map.grid;
   const Rz = GR * zoom;
   const pRad = (pitch * Math.PI) / 180;
   const cosp = Math.cos(pRad), sinp = Math.sin(pRad);
 
   // 球体渲染（正交投影 + 任意方向旋转 + 缩放）
-  const yMin = Math.max(0, Math.floor(GCY - Rz) - 1);
-  const yMax = Math.min(GH - 1, Math.ceil(GCY + Rz) + 1);
-  const xMin = Math.max(0, Math.floor(GCX - Rz) - 1);
-  const xMax = Math.min(GW - 1, Math.ceil(GCX + Rz) + 1);
-  for (let py = yMin; py <= yMax; py++) {
-    for (let px = xMin; px <= xMax; px++) {
+  // One projection per 3px tile rather than per screen pixel. Besides matching
+  // the pixel globe, this avoids nine redundant sets of trigonometric work.
+  const step = 3;
+  drawPixelCircle(d, GCX, GCY, Rz, PAL.rim, .5);
+  for (let py = 0; py < GH; py += step) {
+    for (let px = 0; px < GW; px += step) {
       const dx = (px - GCX) / Rz;
       const dy = (py - GCY) / Rz;
       const d2 = dx * dx + dy * dy;
@@ -1130,14 +1300,13 @@ function drawGlobe(now) {
 
       let rgb;
       if (code === '..' || code === '') {
-        rgb = graticule ? PAL.seaGrid :
-          (((px * 13 + py * 7) & 31) === 0 ? PAL.seaTexture :
-            dz > 0.92 ? PAL.seaLit : dz > 0.6 ? PAL.seaMid : PAL.seaDeep);
+        if (graticule) setPx(d, px, py, PAL.seaGrid);
+        continue;
       } else {
         const isTarget = highlightCode && isHighlightedMapCode(code);
         const coast = edgeHit(coastMask[cellIndex], fx, fy);
         const countryEdge = edgeHit(countryMask[cellIndex], fx, fy);
-        if (isTarget) rgb = countryEdge || coast ? PAL.hiEdge : hiCol;
+        if (isTarget) rgb = countryRippleColor(now, lat, lon, originLat, originLon, countryEdge || coast);
         else if (coast) rgb = PAL.coast;
         else if (countryEdge) rgb = PAL.countryLine;
         else if (graticule) rgb = PAL.landGrid;
@@ -1146,36 +1315,26 @@ function drawGlobe(now) {
           : dz > 0.92 ? PAL.landLit : dz > 0.6 ? PAL.land : PAL.landDark;
       }
       // 球面光照：保留像素硬边，但让近地平线不再塌成一圈黑块
-      const sh = .68 + dz * .32;
-      setPx(d, px, py, [
+      const sh = .9 + dz * .1;
+      const color = [
         Math.min(255, (rgb[0] * sh) | 0),
         Math.min(255, (rgb[1] * sh) | 0),
         Math.min(255, (rgb[2] * sh) | 0),
-      ]);
+      ];
+      // A 1px paper gap keeps the square dots distinct when enlarged by CSS.
+      for (let oy = 0; oy < 2; oy++) for (let ox = 0; ox < 2; ox++) setPx(d, px + ox, py + oy, color);
     }
   }
 
-  // 首都标记：像素定位环 + HTML 信号卡，位置随球面旋转/缩放移动
+  // 定位点保持准确，涟漪沿地球曲面扩散，不再上下跳动。
   if (highlightCode) {
-    const cap = capitals[highlightCode];
-    const lat0 = cap ? cap[0] : countryLat[highlightCode];
-    const lon0 = cap ? cap[1] : countryLon[highlightCode];
+    const lat0 = originLat;
+    const lon0 = originLon;
     if (lat0 !== undefined && lon0 !== undefined) {
       const pos = countryScreenPos(lat0, lon0);
       if (pos.visible) {
         positionGlobePin(pos);
-        const mx = Math.round(pos.x);
-        const my = Math.round(pos.y);
-        const M = Math.max(1, Math.round(GR / 58)); // 标记随分辨率缩放
-        const bounce = Math.round(Math.sin(now / 200) * M);
-        const signalCol = pulse > 0.5 ? PAL.flagRed : PAL.hiB;
-        const markerRadius = Math.max(5, Math.round(M * 5 + pulse * 2));
-        drawPixelCircle(d, mx, my + bounce, markerRadius, PAL.markerGlow, .68);
-        // 小型像素十字作为 HTML 信号 pin 的“落点”阴影
-        const cross = Math.max(3, M * 2);
-        for (let x = mx - cross; x <= mx + cross; x++) setPx(d, x, my + bounce, PAL.poleDark);
-        for (let y = my - cross; y <= my + cross; y++) setPx(d, mx, y + bounce, PAL.poleDark);
-        setPx(d, mx, my + bounce, signalCol);
+        drawCountryRipple(d, pos, lat0, lon0, now);
       }
     } else {
       globePin.classList.remove('is-visible');
@@ -1209,6 +1368,16 @@ function updateGlobe(elapsedMs = 1000 / 60) {
 const GLOBE_FRAME_MS = 1000 / 30;
 let lastGlobeUpdate = null;
 let nextGlobeFrame = 0;
+let globeSignalTime = 0;
+const globeMotionPreference = typeof window.matchMedia === 'function'
+  ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
+let reduceGlobeMotion = Boolean(globeMotionPreference && globeMotionPreference.matches);
+if (globeMotionPreference && typeof globeMotionPreference.addEventListener === 'function') {
+  globeMotionPreference.addEventListener('change', event => {
+    reduceGlobeMotion = event.matches;
+    lastGlobeUpdate = null;
+  });
+}
 function globeLoop(t) {
   requestAnimationFrame(globeLoop);
   if (document.hidden) {
@@ -1218,11 +1387,17 @@ function globeLoop(t) {
   if (lastGlobeUpdate === null) nextGlobeFrame = t;
   if (t + 0.01 < nextGlobeFrame) return;
   // Keep the schedule aligned across 60/120/144Hz screens without accumulating drift.
-  nextGlobeFrame += (Math.floor((t - nextGlobeFrame + 0.01) / GLOBE_FRAME_MS) + 1) * GLOBE_FRAME_MS;
+  const frameMs = reduceGlobeMotion ? 250 : GLOBE_FRAME_MS;
+  nextGlobeFrame += (Math.floor((t - nextGlobeFrame + 0.01) / frameMs) + 1) * frameMs;
   const elapsed = lastGlobeUpdate === null ? 0 : Math.min(100, t - lastGlobeUpdate);
   lastGlobeUpdate = t;
-  updateGlobe(elapsed);
-  drawGlobe(t);
+  if (reduceGlobeMotion) {
+    if (targetRot !== null) { rot = targetRot; pitch = targetPitch; zoom = targetZoom; }
+  } else {
+    updateGlobe(elapsed);
+    globeSignalTime += elapsed;
+  }
+  drawGlobe(reduceGlobeMotion ? 0 : globeSignalTime);
 }
 
 /* ---------------- 交互 ---------------- */
@@ -1247,6 +1422,12 @@ window.addEventListener('keydown', (e) => {
 btnPlay.addEventListener('click', togglePlay);
 btnNext.addEventListener('click', () => next());
 record.addEventListener('click', togglePlay);
+record.addEventListener('keydown', (event) => {
+  if (event.repeat || !['Enter', ' '].includes(event.key)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  togglePlay();
+});
 window.addEventListener('online', () => {
   if (playbackState !== 'offline') return;
   if (started) next('retry');
@@ -1268,17 +1449,55 @@ window.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && !settingsModal.hidden) closeSettings();
 });
 
+async function fetchStartupJson(url, timeoutMs) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { signal: controller.signal, cache: 'no-store' });
+    if (!response.ok) throw new Error('startup resource ' + response.status);
+    const data = await response.json();
+    if (controller.signal.aborted) throw new Error('startup resource timed out');
+    return data;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function loadGlobeResources() {
+  // Each resource can finish independently; neither is required to prepare audio.
+  fetchStartupJson('map.json', GLOBE_RESOURCE_TIMEOUT_MS).then((data) => {
+    map = data;
+    buildGlobeData();
+    if (current && current.countrycode) setCountry(current.countrycode, current.country);
+  }).catch((error) => console.warn('map.json 加载失败', error));
+  fetchStartupJson('capitals.json', GLOBE_RESOURCE_TIMEOUT_MS).then((data) => {
+    capitals = data;
+    if (current && current.countrycode) setCountry(current.countrycode, current.country);
+  }).catch((error) => console.warn('capitals.json 加载失败', error));
+}
+
 async function loadAppInfo() {
   try {
-    const response = await fetch('/api/info', { cache: 'no-store' });
-    if (!response.ok) {
-      updateSourceLabels('jamendo');
-      return;
+    const info = await fetchStartupJson('/api/info', APP_INFO_TIMEOUT_MS);
+    serverStandby = info.serverMode === true;
+    if (serverStandby) {
+      clearInterval(browserHeartbeat);
+      // A slow initial mode check may have allowed legacy prefetch. Once the
+      // server is identified, hand look-ahead ownership back to its queues.
+      if (fetching) {
+        const obsolete=fetching; fetching=null; obsolete.controller.abort();
+        obsolete.promise.then(discardSongCandidate).catch(()=>{});
+      }
+      if (nextSong) { discardSongCandidate(nextSong); nextSong=null; }
     }
-    const info = await response.json();
+    personalQueues=serverStandby && info.personalQueues===true;
+    if (personalQueues) startListeningSession();
     updateSourceLabels(info.mode, info.configured);
   } catch (error) {
     updateSourceLabels('jamendo');
+    // Keep first playback usable during a transient failure, but never leave a
+    // public server page permanently running in the fallback desktop mode.
+    setTimeout(()=>loadAppInfo(),5000);
   }
 }
 
@@ -1288,25 +1507,11 @@ async function loadAppInfo() {
   const demoValue = new URLSearchParams(location.search).get('demo');
   started = demoValue === '1' || demoValue === 'true';
   startBrowserSession();
-  try {
-    const r = await fetch('map.json');
-    if (r.ok) map = await r.json();
-  } catch (e) {
-    console.warn('map.json 加载失败', e);
-  }
-  try {
-    const r2 = await fetch('capitals.json');
-    if (r2.ok) capitals = await r2.json();
-  } catch (e) {
-    console.warn('capitals.json 加载失败', e);
-  }
-  buildGlobeData();
   globe.width = GW;
   globe.height = GH;
   buildBackdrop();
   requestAnimationFrame(globeLoop);
-  if (current) setCountry(current.countrycode, current.country);
-
+  loadGlobeResources();
   await loadAppInfo();
 
   // 默认先把第一首唱片和地图信息摆出来，避免用户面对空白首屏。

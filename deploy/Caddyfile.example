@@ -1,0 +1,6 @@
+# Public gateway template only. Replace the domain after confirming ownership.
+# The dedicated SSH reverse-tunnel port must be checked before deployment.
+vinyl.example.com {
+    encode gzip
+    reverse_proxy 127.0.0.1:18084
+}

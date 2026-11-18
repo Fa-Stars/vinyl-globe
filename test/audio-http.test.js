@@ -197,3 +197,45 @@ test('cancelling an audio response closes its upstream without stopping the serv
   await disconnected;
   assert.equal((await backend.request('/api/info')).status, 200);
 });
+
+test('a progressing audio stream survives multiple read-timeout windows', async (t) => {
+  const chunks = Array.from({ length: 24 }, (_, index) => 'chunk-' + index + ';');
+  const { backend, song } = await registerSong(t, {
+    audioTimeoutMs: 300,
+    upstream(req, res) {
+      const route = new URL(req.url, 'http://localhost').searchParams.get('path');
+      if (!route?.startsWith('/audio/') || !req.headers.range) return liveUpstream(req, res);
+      res.writeHead(200, { 'Content-Type': 'audio/mpeg' });
+      let index = 0;
+      const timer = setInterval(() => {
+        res.write(chunks[index++]);
+        if (index === chunks.length) {
+          clearInterval(timer);
+          res.end();
+        }
+      }, 40);
+      res.on('close', () => clearInterval(timer));
+    },
+  });
+  const response = await backend.request('/audio/' + song.id, { headers: { Range: 'bytes=0-' } });
+  assert.equal(await response.text(), chunks.join(''));
+});
+
+test('a stalled audio body is cancelled without stopping the backend', async (t) => {
+  let upstreamClosed;
+  const closed = new Promise(resolve => { upstreamClosed = resolve; });
+  const { backend, song } = await registerSong(t, {
+    audioTimeoutMs: 300,
+    upstream(req, res) {
+      const route = new URL(req.url, 'http://localhost').searchParams.get('path');
+      if (!route?.startsWith('/audio/') || !req.headers.range) return liveUpstream(req, res);
+      res.on('close', upstreamClosed);
+      res.writeHead(200, { 'Content-Type': 'audio/mpeg' });
+      res.write('begin');
+    },
+  });
+  const response = await backend.request('/audio/' + song.id, { headers: { Range: 'bytes=0-' } });
+  await assert.rejects(response.text());
+  await closed;
+  assert.equal((await backend.request('/api/info')).status, 200);
+});

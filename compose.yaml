@@ -1,0 +1,31 @@
+services:
+  world-vinyl:
+    build: .
+    image: local/world-vinyl:server
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${WORLD_VINYL_BIND_ADDRESS:-127.0.0.1}:${WORLD_VINYL_HTTP_PORT:-3000}:3000"
+    volumes:
+      - "${WORLD_VINYL_SERVER_DATA:-./data}:/data"
+    cpus: 1.0
+    mem_limit: 512m
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/info').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 60s
+      timeout: 5s
+      start_period: 120s
+      retries: 3
+    stop_grace_period: 15s

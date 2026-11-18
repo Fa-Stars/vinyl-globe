@@ -1,271 +1,122 @@
 'use strict';
-// 临时工具：渲染像素地球 PNG 供目视检查（与 app.js 逻辑一致，无第三方依赖）
-const fs = require('fs');
-const path = require('path');
-const zlib = require('zlib');
+
+// Render the actual app.js Canvas implementation, with no duplicate palette or
+// projection code and no browser, credentials, network, or third-party modules.
+const fs = require('node:fs');
+const path = require('node:path');
+const zlib = require('node:zlib');
+const { createPlayer } = require('../../test-support/player.cjs');
 
 const WEB_ROOT = path.resolve(__dirname, '..');
-const map = JSON.parse(fs.readFileSync(path.join(WEB_ROOT, 'public', 'map.json'), 'utf8'));
+const DEFAULT_CODES = ['DE', 'US', 'RU', 'NL', 'MT', 'SG', 'JP', 'BR'];
 
-const GW = 320, GH = 320, GCX = 160, GCY = 160, GR = 136;
-const ZOOM_MAX = 1.14;
-const DISPLAY_CODE_ALIASES = { TW: 'CN' };
-const PAL = {
-  skyBands: [[4, 12, 23], [5, 20, 34], [7, 31, 45], [10, 43, 52], [13, 55, 57]],
-  rim: [53, 148, 140], star: [170, 224, 196],
-  seaDeep: [3, 18, 34], seaMid: [5, 42, 61], seaLit: [13, 84, 96],
-  seaGrid: [24, 89, 98], seaTexture: [16, 61, 73],
-  coast: [91, 165, 139], countryLine: [21, 78, 70],
-  landDark: [21, 56, 53], land: [46, 108, 88], landLit: [96, 164, 122],
-  landTexture: [68, 133, 103], landGrid: [34, 91, 78],
-  hiA: [255, 196, 80], hiB: [255, 240, 174], hiEdge: [255, 141, 77],
-  flagRed: [255, 108, 92], pole: [226, 244, 211], poleDark: [79, 111, 104],
-};
-const capitals = JSON.parse(fs.readFileSync(path.join(WEB_ROOT, 'public', 'capitals.json'), 'utf8'));
-const buf = Buffer.alloc(GW * GH * 4);
-const setPx = (x, y, rgb) => {
-  if (x < 0 || x >= GW || y < 0 || y >= GH) return;
-  const i = (y * GW + x) * 4;
-  buf[i] = rgb[0]; buf[i + 1] = rgb[1]; buf[i + 2] = rgb[2]; buf[i + 3] = 255;
-};
-// 深空色带天空 + 球体边缘细描边 + 低亮度星空
-(function buildBackdrop() {
-  const bands = PAL.skyBands;
-  const bandH = GH / bands.length;
-  for (let y = 0; y < GH; y++) {
-    const b = Math.min(bands.length - 1, Math.floor(y / bandH));
-    const c = bands[b];
-    for (let x = 0; x < GW; x++) {
-      const i = (y * GW + x) * 4;
-      buf[i] = c[0]; buf[i + 1] = c[1]; buf[i + 2] = c[2]; buf[i + 3] = 255;
-    }
-  }
-  for (let y = 0; y < GH; y++) for (let x = 0; x < GW; x++) {
-    const dist = Math.hypot(x - GCX, y - GCY);
-    if (dist > GR && dist < GR + 3) {
-      const i = (y * GW + x) * 4;
-      buf[i] = PAL.rim[0]; buf[i + 1] = PAL.rim[1]; buf[i + 2] = PAL.rim[2]; buf[i + 3] = 255;
-    }
-  }
-  let seed = 987654321;
-  const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
-  for (let i = 0; i < 110; i++) {
-    const x = (rnd() * GW) | 0;
-    const y = (rnd() * GH) | 0;
-    if (Math.hypot(x - GCX, y - GCY) < GR + 6) continue;
-    setPx(x, y, PAL.star);
-  }
-})();
-
-// 国家质心 / 面积
-const acc = {};
-for (let y = 0; y < map.h; y++) for (let x = 0; x < map.w; x++) {
-  const c = map.grid.substr((y * map.w + x) * 2, 2);
-  if (c === '..') continue;
-  const lon = -180 + (x + 0.5) * (360 / map.w);
-  const lat = 90 - (y + 0.5) * (180 / map.h);
-  if (!acc[c]) acc[c] = { sx: 0, sy: 0, slat: 0, n: 0 };
-  acc[c].sx += Math.sin(lon * Math.PI / 180); acc[c].sy += Math.cos(lon * Math.PI / 180); acc[c].slat += lat; acc[c].n++;
-}
-const countryLon = {}, countryLat = {}, countryArea = {};
-for (const [c, a] of Object.entries(acc)) {
-  countryLon[c] = ((Math.atan2(a.sx, a.sy) * 180 / Math.PI) + 360) % 360;
-  countryLat[c] = a.slat / a.n;
-  countryArea[c] = a.n;
-}
-function countryZoom(code) {
-  const area = countryArea[code] || 1;
-  return Math.min(ZOOM_MAX, Math.max(1, 1.06 + Math.min(.42, Math.sqrt(area) / 42)));
-}
-function displayCodeFor(code) { return DISPLAY_CODE_ALIASES[code] || code; }
-function isHighlightedMapCode(mapCode, activeCode) {
-  return mapCode === activeCode || (activeCode === 'CN' && mapCode === 'TW');
-}
-
-// 海岸线 / 国界边缘 bitmask
-const coastMask = new Uint8Array(map.w * map.h);
-const countryMask = new Uint8Array(map.w * map.h);
-for (let y = 0; y < map.h; y++) for (let x = 0; x < map.w; x++) {
-  const c = map.grid.substr((y * map.w + x) * 2, 2);
-  if (c === '..') continue;
-  const nb = [map.grid.substr((y * map.w + ((x + 1) % map.w)) * 2, 2), map.grid.substr((y * map.w + ((x + map.w - 1) % map.w)) * 2, 2),
-              map.grid.substr((((y + 1) % map.h) * map.w + x) * 2, 2), map.grid.substr((((y + map.h - 1) % map.h) * map.w + x) * 2, 2)];
-  const idx = y * map.w + x;
-  for (let i = 0; i < nb.length; i++) {
-    if (nb[i] === '..' || nb[i] === '') coastMask[idx] |= 1 << i;
-    else if (nb[i] !== c) countryMask[idx] |= 1 << i;
-  }
-}
-function nearGridLine(value, step = 15, tolerance = .42) {
-  const half = step / 2;
-  const wrapped = ((value + half) % step + step) % step - half;
-  return Math.abs(wrapped) < tolerance;
-}
-function edgeHit(mask, fx, fy) {
-  return ((mask & 1) && fx > .58) || ((mask & 2) && fx < .42) ||
-    ((mask & 4) && fy > .58) || ((mask & 8) && fy < .42);
-}
-
-// 渲染指定国家（转到正面 + 按大小缩放；无格子国家用首都兜底）
-function render(code, zoomOverride) {
-  code = displayCodeFor(code);
-  const hasCells = countryLon[code] !== undefined;
-  const cap = capitals[code];
-  let rot, pitch, zoom;
-  if (hasCells) {
-    rot = countryLon[code];
-    pitch = countryLat[code];
-    zoom = zoomOverride || countryZoom(code);
-  } else if (cap) {
-    rot = cap[1];
-    pitch = cap[0];
-    zoom = zoomOverride || 1.08;
-  } else {
-    return null;
-  }
-  const pulse = 0.8;
-  const hiCol = pulse > 0.5 ? PAL.hiA : PAL.hiB;
-  const Rz = GR * zoom;
-  const pRad = pitch * Math.PI / 180;
-  const cosp = Math.cos(pRad), sinp = Math.sin(pRad);
-  const yMin = Math.max(0, Math.floor(GCY - Rz) - 1);
-  const yMax = Math.min(GH - 1, Math.ceil(GCY + Rz) + 1);
-  const xMin = Math.max(0, Math.floor(GCX - Rz) - 1);
-  const xMax = Math.min(GW - 1, Math.ceil(GCX + Rz) + 1);
-  for (let py = yMin; py <= yMax; py++) {
-    for (let px = xMin; px <= xMax; px++) {
-      const dx = (px - GCX) / Rz, dy = (py - GCY) / Rz;
-      const d2 = dx * dx + dy * dy;
-      if (d2 > 1) continue;
-      const dz = Math.sqrt(1 - d2);
-      const dy2 = dy * cosp - dz * sinp;
-      const dz2 = dy * sinp + dz * cosp;
-      const lat = Math.asin(-dy2) * 180 / Math.PI;
-      const lon = (((Math.atan2(dx, dz2) * 180 / Math.PI) + rot + 540) % 360) - 180;
-      const mapX = (lon + 180) / 360 * map.w;
-      const mapY = (90 - lat) / 180 * map.h;
-      const gx = Math.min(map.w - 1, Math.max(0, Math.floor(mapX)));
-      const gy = Math.min(map.h - 1, Math.max(0, Math.floor(mapY)));
-      const fx = mapX - Math.floor(mapX), fy = mapY - Math.floor(mapY);
-      const idx = gy * map.w + gx;
-      const c = map.grid.substr((gy * map.w + gx) * 2, 2);
-      const graticule = nearGridLine(lat) || nearGridLine(lon);
-      let rgb;
-      if (c === '..') {
-        rgb = graticule ? PAL.seaGrid : (((px * 13 + py * 7) & 31) === 0 ? PAL.seaTexture :
-          dz > 0.92 ? PAL.seaLit : dz > 0.6 ? PAL.seaMid : PAL.seaDeep);
-      } else {
-        const isTarget = isHighlightedMapCode(c, code);
-        const coast = edgeHit(coastMask[idx], fx, fy);
-        const countryEdge = edgeHit(countryMask[idx], fx, fy);
-        if (isTarget) rgb = countryEdge || coast ? PAL.hiEdge : hiCol;
-        else if (coast) rgb = PAL.coast;
-        else if (countryEdge) rgb = PAL.countryLine;
-        else if (graticule) rgb = PAL.landGrid;
-        else rgb = (((px * 7 + py * 11 + gx * 5 + gy * 3) & 47) === 0) ? PAL.landTexture :
-          dz > 0.92 ? PAL.landLit : dz > 0.6 ? PAL.land : PAL.landDark;
-      }
-      const sh = .68 + dz * .32;
-      setPx(px, py, [Math.min(255, (rgb[0] * sh) | 0), Math.min(255, (rgb[1] * sh) | 0), Math.min(255, (rgb[2] * sh) | 0)]);
-    }
-  }
-  // 首都像素定位环（与 app.js 的信号 pin 落点一致）
-  const capM = capitals[code];
-  const la0 = capM ? capM[0] : countryLat[code];
-  const lo0 = capM ? capM[1] : countryLon[code];
-  const laR = la0 * Math.PI / 180, loR = lo0 * Math.PI / 180;
-  const rR = rot * Math.PI / 180, pR = pitch * Math.PI / 180;
-  const dy2 = -Math.sin(laR);
-  const dxS = Math.cos(laR) * Math.sin(loR - rR);
-  const dz2 = Math.cos(laR) * Math.cos(loR - rR);
-  const dyS = dy2 * Math.cos(pR) + dz2 * Math.sin(pR);
-  const dzS = -dy2 * Math.sin(pR) + dz2 * Math.cos(pR);
-  const mx = Math.round(GCX + dxS * Rz);
-  const my = Math.round(GCY + dyS * Rz);
-  const M = Math.max(1, Math.round(GR / 58));
-  const signalCol = pulse > 0.5 ? PAL.flagRed : PAL.hiB;
-  const cross = Math.max(3, M * 2);
-  for (let x = mx - cross; x <= mx + cross; x++) setPx(x, my, PAL.poleDark);
-  for (let y = my - cross; y <= my + cross; y++) setPx(mx, y, PAL.poleDark);
-  setPx(mx, my, signalCol);
-  return { rot, pitch, zoom, area: countryArea[code], marker: [mx, my] };
-}
-
-// ---- PNG 编码 ----
-function crc32(b) {
-  let c, table = [];
-  for (let n = 0; n < 256; n++) { c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; table[n] = c >>> 0; }
+function crc32(bytes) {
   let crc = 0xffffffff;
-  for (let i = 0; i < b.length; i++) crc = table[(crc ^ b[i]) & 0xff] ^ (crc >>> 8);
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit++) crc = crc & 1 ? 0xedb88320 ^ (crc >>> 1) : crc >>> 1;
+  }
   return (crc ^ 0xffffffff) >>> 0;
 }
+
 function chunk(type, data) {
-  const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
-  const t = Buffer.from(type, 'ascii');
-  const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(Buffer.concat([t, data])));
-  return Buffer.concat([len, t, data, crc]);
-}
-function savePng(file, scale) {
-  const W = GW * scale, H = GH * scale;
-  const raw = Buffer.alloc(H * (1 + W * 3));
-  for (let y = 0; y < H; y++) {
-    const sy = (y / scale) | 0;
-    raw[y * (1 + W * 3)] = 0;
-    for (let x = 0; x < W; x++) {
-      const sx = (x / scale) | 0;
-      const i = (sy * GW + sx) * 4;
-      const o = y * (1 + W * 3) + 1 + x * 3;
-      raw[o] = buf[i]; raw[o + 1] = buf[i + 1]; raw[o + 2] = buf[i + 2];
-    }
-  }
-  const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(W, 0); ihdr.writeUInt32BE(H, 4); ihdr[8] = 8; ihdr[9] = 2;
-  fs.writeFileSync(file, Buffer.concat([
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-    chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0)),
-  ]));
-}
-function ascii() {
-  const cls = (i) => {
-    const r = buf[i], g = buf[i + 1], b = buf[i + 2];
-    // 按主色相分类（容忍明暗缩放）
-    if (r > 180 && g > 160 && b < 160) return '*'; // 高亮黄
-    if (r > 200 && g > 200 && b > 200) return '#'; // 高亮白/标记
-    if (b > r && b > g) return b < 60 && r < 60 ? ' ' : '.'; // 海/天
-    if (g > r && g > b) return 'L';                        // 陆地
-    return '?';
-  };
-  let out = '';
-  for (let y = 0; y < GH; y += 2) {
-    let line = '';
-    for (let x = 0; x < GW; x += 2) line += cls((y * GW + x) * 4);
-    out += line + '\n';
-  }
-  return out;
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(data.length);
+  const name = Buffer.from(type, 'ascii');
+  const checksum = Buffer.alloc(4);
+  checksum.writeUInt32BE(crc32(Buffer.concat([name, data])));
+  return Buffer.concat([length, name, data, checksum]);
 }
 
-(async () => {
-  for (const code of ['DE', 'US', 'RU', 'NL', 'MT', 'SG', 'JP', 'BR']) {
-    const info = render(code);
-    if (!info) { console.log(code + ': 无法定位'); continue; }
-    const file = 'data/globe-' + code + '.png';
-    savePng(file, 3);
-    let flagPx = 0;
-    for (let i = 0; i < buf.length; i += 4) {
-      if (buf[i] === PAL.flagRed[0] && buf[i + 1] === PAL.flagRed[1] && buf[i + 2] === PAL.flagRed[2]) flagPx++;
+function encodePng(frame, scale) {
+  const width = frame.width * scale;
+  const height = frame.height * scale;
+  const rowSize = 1 + width * 3;
+  const raw = Buffer.alloc(height * rowSize);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const source = (Math.floor(y / scale) * frame.width + Math.floor(x / scale)) * 4;
+      const target = y * rowSize + 1 + x * 3;
+      raw[target] = frame.data[source];
+      raw[target + 1] = frame.data[source + 1];
+      raw[target + 2] = frame.data[source + 2];
     }
-    const cells = countryArea[code] ? countryArea[code] + '格' : '无格子(首都兜底)';
-    console.log(code + ': ' + cells + ', 缩放=' + info.zoom.toFixed(2) + 'x, 信号点@(' + info.marker[0] + ',' + info.marker[1] + '), 信号像素=' + flagPx);
   }
-  // 德国全景 + 特写
-  render('DE', 1);
-  console.log('\n--- 德国全景 (zoom=1, pitch=52°) ---');
-  console.log(ascii());
-  render('DE');
-  console.log('\n--- 德国特写 (zoom=7) ---');
-  console.log(ascii());
-  // 荷兰（无格子 → 首都阿姆斯特丹兜底）
-  render('NL');
-  console.log('\n--- 荷兰特写 (无格子, 首都兜底 zoom=4) ---');
-  console.log(ascii());
-})();
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header[8] = 8;
+  header[9] = 2; // RGB, PNG filter 0 on each row.
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', header), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+async function renderGlobePreviews({ codes = DEFAULT_CODES, outDir = path.join(WEB_ROOT, '../data'), scale = 3 } = {}) {
+  if (!Number.isInteger(scale) || scale < 1 || scale > 8) throw new RangeError('Scale must be an integer from 1 to 8');
+  if (!Array.isArray(codes) || !codes.length || codes.some(code => typeof code !== 'string' || !/^[A-Z]{2}$/.test(code))) {
+    throw new RangeError('Expected two-letter uppercase country codes');
+  }
+  const mapData = JSON.parse(fs.readFileSync(path.join(WEB_ROOT, 'public/map.json'), 'utf8'));
+  const capitals = JSON.parse(fs.readFileSync(path.join(WEB_ROOT, 'public/capitals.json'), 'utf8'));
+  const player = await createPlayer({
+    mapData,
+    capitalsResponse: response => response(capitals),
+    infoResponse: response => response({ mode: 'setup-required', configured: false }),
+  });
+  const previews = [];
+  for (const code of [...new Set(codes)]) {
+    const info = player.focusCountry(code);
+    if (!info) continue;
+    const frame = player.lastFrame;
+    const file = path.resolve(outDir, 'globe-' + code + '.png');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, encodePng(frame, scale));
+    previews.push({ ...info, file, width: frame.width * scale, height: frame.height * scale });
+  }
+  return previews;
+}
+
+function parseArgs(args) {
+  const options = { codes: [] };
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+    if (arg === '--out-dir') {
+      const value = args[++index];
+      if (!value || value.startsWith('--')) throw new Error('--out-dir needs a directory');
+      options.outDir = path.resolve(value);
+    } else if (arg === '--scale') {
+      options.scale = Number(args[++index]);
+    } else if (/^[a-z]{2}$/i.test(arg)) {
+      options.codes.push(arg.toUpperCase());
+    } else {
+      throw new Error('Unknown argument: ' + arg);
+    }
+  }
+  if (!options.codes.length) delete options.codes;
+  return options;
+}
+
+if (require.main === module) {
+  (async () => {
+    const args = process.argv.slice(2);
+    if (args.includes('--help')) {
+      console.log('Usage: node web/scripts/render-globe.js [FR MT ...] [--out-dir DIRECTORY] [--scale 1..8]');
+      console.log('Defaults: data/globe-XX.png, scale 3. Renders the current app.js without network access.');
+      return;
+    }
+    const options = parseArgs(args);
+    const previews = await renderGlobePreviews(options);
+    for (const preview of previews) {
+      console.log(preview.code + ': ' + preview.width + 'x' + preview.height +
+        ', zoom=' + preview.zoom.toFixed(2) + ', ' + preview.file);
+    }
+    if (!previews.length) throw new Error('No requested country could be located');
+  })().catch(error => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { renderGlobePreviews };
