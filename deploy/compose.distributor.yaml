@@ -1,0 +1,25 @@
+services:
+  distributor:
+    build: ..
+    command: ["node", "services/distributor.js"]
+    restart: unless-stopped
+    init: true
+    environment:
+      WORLD_VINYL_HOST: 0.0.0.0
+      PORT: 3100
+      VINYL_LIBRARY_DIR: /data/library
+      VINYL_UPLOAD_TOKEN: ${VINYL_UPLOAD_TOKEN:?set upload secret}
+      VINYL_TARGET: ${VINYL_TARGET:-72}
+      VINYL_MAX_BYTES: ${VINYL_MAX_BYTES:-5368709120}
+    ports:
+      - "127.0.0.1:${VINYL_HTTP_PORT:-3100}:3100"
+    volumes:
+      - library:/data
+    read_only: true
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/api/info').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+volumes:
+  library:

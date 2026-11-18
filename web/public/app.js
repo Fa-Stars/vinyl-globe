@@ -317,6 +317,16 @@ function showSetupRequired(message) {
 }
 
 function updateSourceLabels(mode, configured) {
+  if (mode === 'distribution') {
+    sourceMode = mode;
+    setupRequired = false;
+    npMode.textContent = 'WORLD VINYL LIBRARY';
+    sourceLink.textContent = '世界唱片机曲库';
+    sourceLink.href = '/';
+    settingsButton.hidden = true;
+    updateHeaderStatus();
+    return;
+  }
   const explicitlySetupRequired = mode === 'setup-required' || configured === false;
   if (explicitlySetupRequired) setupRequired = true;
   // Once the API has explicitly reported missing credentials, keep that

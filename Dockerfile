@@ -8,6 +8,7 @@ WORKDIR /app
 COPY --chown=node:node package.json runtime-cache.js ./
 COPY --chown=node:node web/*.js web/*.json ./web/
 COPY --chown=node:node web/public/ ./web/public/
+COPY --chown=node:node services/ ./services/
 RUN mkdir /data && chown node:node /data
 USER node
 EXPOSE 3000

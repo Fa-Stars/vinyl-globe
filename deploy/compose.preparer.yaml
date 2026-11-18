@@ -1,0 +1,15 @@
+services:
+  preparer:
+    build: ..
+    command: ["node", "services/preparer.js"]
+    restart: unless-stopped
+    init: true
+    environment:
+      VINYL_DISTRIBUTOR_URL: ${VINYL_DISTRIBUTOR_URL:?set distribution HTTPS origin}
+      VINYL_UPLOAD_TOKEN: ${VINYL_UPLOAD_TOKEN:?set upload secret}
+      VINYL_MANIFEST: /catalog/tracks.json
+      JAMENDO_CLIENT_ID: ${JAMENDO_CLIENT_ID:-}
+    volumes:
+      - "${VINYL_CATALOG_DIR:?set local catalog directory}:/catalog:ro"
+    read_only: true
+    mem_limit: 384m

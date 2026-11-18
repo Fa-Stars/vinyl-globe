@@ -10,6 +10,40 @@
 
 ## 当前版本与下载
 
+本分支为 **2.0.0 开发版**，基于 `bcb4cce` 拆分西安备歌服务和国内云分发服务。网页与实体终端可使用同一套取歌接口。以下 v1.0.2 下载链接对应既有 Windows 发布包。
+
+### 2.0 双服务试运行
+
+两个服务使用 Node.js 24，运行时只用内置模块。西安备歌进程主动通过 HTTPS 上传，云端保存完整音频、可选封面及歌曲资料，并提供现有网页。网页和设备只访问云端。传统单进程入口 `node web/server.js` 仍可用于桌面版本。
+
+| 位置 | 启动命令 | 环境变量 |
+|---|---|---|
+| 国内云或本机模拟分发节点 | `npm run distribute` | `VINYL_LIBRARY_DIR` 为专用持久化目录，`VINYL_UPLOAD_TOKEN` 为两端共享的随机密钥（至少 24 字符），默认地址为 `127.0.0.1:3100` |
+| 西安或本机模拟备歌节点 | `npm run prepare-tracks` | `VINYL_DISTRIBUTOR_URL`、`VINYL_UPLOAD_TOKEN`、`VINYL_MANIFEST`（清单绝对路径）。仅使用 Jamendo 来源时需要 `JAMENDO_CLIENT_ID` |
+
+本机联调可使用回环 HTTP。跨机器部署时，对外入口使用 HTTPS。两个独立的 Compose 文件位于 [备歌部署](deploy/compose.preparer.yaml) 和 [分发部署](deploy/compose.distributor.yaml)。在对应机器设置表中变量，用 `docker compose -f deploy/compose.distributor.yaml up -d --build` 或 `docker compose -f deploy/compose.preparer.yaml up -d --build` 启动。备歌容器通过 `VINYL_CATALOG_DIR` 挂载含 `tracks.json` 和授权媒体的目录；分发容器使用自己的命名卷。上传密钥仅供两个后端使用。
+
+**第一次试跑**可以执行 `node test-support/split-fixture.cjs <新的测试目录>` 生成 12 首可解码的合成音频及 `tracks.json`。将 `VINYL_MANIFEST` 指向它，启动分发端后运行 `npm run prepare-tracks -- --once`。每轮最多传 6 首，运行两轮后即可打开分发端网页。常驻模式默认每 30 秒检查库存，上传失败会退避。
+
+**授权清单**由一个备歌服务负责维护。下面是一条自有作品条目的格式示例，清单文件本身是数组。媒体文件使用相对清单目录的路径。曲目标识对应不可变的媒体内容，更换音频或封面时请使用新的标识。
+
+```json
+[
+  {
+    "id": "studio-001", "provider": "local", "file": "studio-001.wav",
+    "audioType": "audio/wav", "title": "工作室录音", "artist": "录音作者",
+    "countrycode": "CN", "duration": 120,
+    "grant": "自有录音或实际授权记录编号", "validUntil": "2027-12-31T23:59:59Z"
+  }
+]
+```
+
+支持 MP3、WAV，以及可选的 `cover` 和 `coverType`（JPEG、PNG、WebP）。Jamendo 条目使用 `provider: "jamendo"`、数字字符串歌曲 ID、实际授权记录 `grant` 以及截止时间 `validUntil`。仅列入已经取得相应云端存储与分发许可的曲目；备歌端还会核对 Jamendo 的逐曲下载开关，并使用其下载地址。备歌端在这些曲目中随机选取，向 Jamendo 获取音频、艺人地区、歌曲原页及逐曲许可；资料无法确认时显示未知地区。仅持有 API 凭证不等于获得设备离线播放或云分发授权。[Jamendo API 使用条款](https://devportal.jamendo.com/api_terms_of_use)
+
+**库存和恢复。** 分发端在 SQLite 事务中校验并发布媒体，重复上传校验一致时复用同一份文件。曲库在重启后保留。默认库存目标为 72 首（`VINYL_TARGET`），媒体总量上限 5 GiB（`VINYL_MAX_BYTES`），单首 16 MiB、单张封面 1 MiB；SQLite 索引、事务日志需要额外磁盘空间。达到目标后停止补货，有新候选时可替换入库超过一天且无人使用的曲目。清单删除的曲目在下次成功同步时撤下；授权到期后，云端自行停止提供该曲。测试和正式环境应使用不同的目录、上传密钥和清单。
+
+**播放接口。** `POST /api/listening-session` 返回临时令牌，以 `X-Vinyl-Session` 传递。每 20 秒心跳，空闲 2 分钟回收。每个播放端独立保留最多 5 首待播；库存充足时，`GET /api/queue` 可预览完整顺序，无需消耗队列。每次开始下一首，调用 `GET /api/song` 并带递增的 `X-Vinyl-Sequence`；重试最近序号会得到同一首。返回的音频地址支持 GET、HEAD 和 HTTP Range。云端重启后客户端重新建立会话。这里的待播数量表示云端可领取的歌曲，设备下载、解码与离线存储策略留给实体端实现。
+
 当前发布版本为 **v1.0.2 · Windows x64**，发布文件与项目状态于 **2026-09-18** 核对。
 
 | 下载 | 用途 |
