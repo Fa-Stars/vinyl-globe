@@ -131,6 +131,34 @@ test('approved Jamendo IDs are prepared only by the worker; cloud playback uses 
   assert.equal(calls.length, 3);
 });
 
+test('Jamendo HTML content type requires two complete MP3 frames before upload', async t => {
+  const env = await environment(t);
+  await fs.writeFile(env.manifest, JSON.stringify([{ provider: 'jamendo', id: '987', grant: 'Test fixture',
+    validUntil: new Date(Date.now() + 60000).toISOString() }]));
+  const tag = Buffer.from([0x49,0x44,0x33,4,0,0,0,0,0,0]);
+  const frame = Buffer.alloc(417); // MPEG-1 Layer III, 128 kb/s, 44.1 kHz.
+  frame.set([0xff,0xfb,0x90,0x00]);
+  let body;
+  const run = createPreparer({ ...env, clientId: 'fixture', fetchMusic: async url => {
+    if (new URL(url).pathname === '/download') return new Response(body, { headers: { 'Content-Type': 'text/html; charset=UTF-8' } });
+    if (new URL(url).pathname === '/v3.0/tracks/') return Response.json({ results: [{
+      id: '987', name: 'Sample', artist_id: '8', artist_name: 'Sample artist', audio: 'https://api.jamendo.com/stream',
+      audiodownload_allowed: true, audiodownload: 'https://api.jamendo.com/download',
+      license_ccurl: 'https://creativecommons.org/licenses/by/4.0/' }] });
+    return Response.json({ headers: { status: 'success' }, results: [{ id: '8', locations: [{ country: 'GBR' }] }] });
+  } });
+  for (const invalid of [Buffer.from('<html>Unavailable</html>'), tag, Buffer.concat([tag, frame, frame.subarray(0, 4)])]) {
+    body = invalid;
+    await assert.rejects(run(), /Published 0 tracks, failed 1/);
+    assert.equal((await env.request('/audio/987')).status, 404);
+  }
+  body = Buffer.concat([tag, frame, frame]);
+  assert.equal(await run(), 1);
+  const response = await env.request('/audio/987');
+  assert.equal(response.headers.get('content-type'), 'audio/mpeg');
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()), body);
+});
+
 test('a stream URL never substitutes for a disabled Jamendo download', async t => {
   const env = await environment(t);
   await fs.writeFile(env.manifest, JSON.stringify([{ provider: 'jamendo', id: '123', grant: 'Test fixture',

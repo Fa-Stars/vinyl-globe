@@ -6,6 +6,7 @@ const { randomInt } = require('node:crypto');
 const { createJamendoFetch } = require('../web/jamendo-fetch');
 const { normalizeJamendoTrack } = require('../web/jamendo-metadata');
 const { lookupJamendoCountry, countryCodes } = require('../web/jamendo-country');
+const { hasMp3Frames } = require('./mp3');
 const { createArtworkCache } = require('../web/artwork-cache');
 const { AUDIO_LIMIT, COVER_LIMIT, ID, audioTypes, coverTypes, digest, integer, readLimited, validTrack } = require('./protocol');
 
@@ -63,11 +64,13 @@ function createPreparer({ endpoint, token, manifest, clientId, fetchMusic = crea
         throw Error('Track missing attribution or unavailable for download');
       }
       const response = await fetchMusic(row.audiodownload, { signal: AbortSignal.timeout(90000) });
-      const mime = (response.headers.get('content-type') || '').split(';')[0].toLowerCase();
-      if (!response.ok || !['audio/mpeg','audio/mp3','application/octet-stream'].includes(mime)) {
+      const mime = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+      if (!response.ok || !['audio/mpeg','audio/mp3','application/octet-stream','text/html'].includes(mime)) {
         await response.body?.cancel(); throw Error('Jamendo audio unavailable');
       }
       audio = await readLimited(response.body, AUDIO_LIMIT);
+      // Some Jamendo storage nodes label genuine MP3 downloads as HTML.
+      if (mime === 'text/html' && !hasMp3Frames(audio)) throw Error('Jamendo returned non-audio content');
       const [location, image] = await Promise.all([
         lookupJamendoCountry(song.artist, song.artistId, { clientId, countries, fetchJson: musicJson }),
         images.get(song.artwork),
