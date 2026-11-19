@@ -20,10 +20,10 @@ function createSessions(library, maxSessions = 32) {
     return s;
   }
 
-  function fill(s) {
-    const ids = library.list().map(item => item.id);
+  function fill(s, ids = library.playableIds()) {
     const available = new Set(ids);
     s.queue = s.queue.filter(id => available.has(id));
+    if (s.queue.length === target) return s.queue;
     const choices = ids.filter(id => id !== s.current && !s.queue.includes(id));
     while (s.queue.length < target && choices.length) {
       const fresh = choices.filter(id => !s.history.includes(id));
@@ -60,13 +60,14 @@ function createSessions(library, maxSessions = 32) {
         if (!library.find(s.current)) throw fault(410, 'TRACK_WITHDRAWN');
         return s.current;
       }
-      const id = fill(s).shift();
+      const ids = library.playableIds();
+      const id = fill(s, ids).shift();
       if (!id) throw fault(503, 'BUFFER_PREPARING');
       s.current = id;
       s.sequence = sequence;
       s.history.push(id);
       s.history = s.history.slice(-64);
-      fill(s);
+      fill(s, ids);
       return id;
     },
   };

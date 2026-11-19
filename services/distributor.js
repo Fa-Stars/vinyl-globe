@@ -127,13 +127,14 @@ function createDistributor({ directory, token, target = 72, maxBytes = 5 * 1024 
     }
     if (!['HEAD', 'GET'].includes(method)) throw fault(405, 'Unsupported method');
     if (route === '/api/info') {
-      const count = library.list().length;
+      const count = library.playableIds().length;
       return json(res, 200, { mode: 'distribution', version, configured: true, serverMode: true,
         personalQueues: true, songs: count, buffer: { ready: count, target, sessions: sessions.count(), perSessionTarget: sessions.target } });
     }
     if (route.startsWith('/api/') && method !== 'GET') throw fault(405, 'GET required');
     if (route === '/api/queue') return json(res, 200, { tracks: sessions.fill(sessions.get(token)).map(publicSong) });
     if (route === '/api/song') {
+      const start = performance.now();
       if (!token) throw fault(401, 'SESSION_EXPIRED');
       const session = sessions.get(token);
       const id = sessions.take(session, Number(req.headers['x-vinyl-sequence']));
@@ -144,6 +145,7 @@ function createDistributor({ directory, token, target = 72, maxBytes = 5 * 1024 
         const meta = JSON.parse(row.meta);
         song.upNext = { id: head, streamUrl: '/audio/' + head, audioType: meta.audioType, audioHash: meta.audioHash };
       }
+      res.setHeader('Server-Timing', 'song;dur=' + (performance.now() - start).toFixed(2));
       return json(res, 200, song);
     }
     if (route === '/api/country') {

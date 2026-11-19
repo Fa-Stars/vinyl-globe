@@ -10,6 +10,9 @@ function openLibrary(directory, { maxBytes, maxTracks }) {
   const db = new DatabaseSync(path.join(directory, 'library.sqlite'));
   db.exec('PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;');
   db.exec('CREATE TABLE IF NOT EXISTS tracks (id TEXT PRIMARY KEY, meta TEXT NOT NULL, hash TEXT NOT NULL, audio BLOB NOT NULL, cover BLOB NOT NULL, bytes INTEGER NOT NULL, expires INTEGER NOT NULL, added INTEGER NOT NULL)');
+  // Cover the playback eligibility query without touching rows that contain the audio.
+  db.exec('CREATE INDEX IF NOT EXISTS tracks_playable ON tracks(expires, id)');
+  const playable = db.prepare('SELECT id FROM tracks WHERE expires > ?');
   const list = db.prepare("SELECT id, added, json_extract(meta,'$.revision') AS revision FROM tracks WHERE expires > ? ORDER BY added");
   const pending = db.prepare(`SELECT id, json_extract(meta,'$.artist') AS artist,
     json_extract(meta,'$.artistId') AS artistId, json_extract(meta,'$.revision') AS revision
@@ -27,6 +30,7 @@ function openLibrary(directory, { maxBytes, maxTracks }) {
   const expired = db.prepare('DELETE FROM tracks WHERE expires <= ?');
   const metadata = db.prepare('UPDATE tracks SET meta=?,expires=?,added=? WHERE id=?');
   return {
+    playableIds: () => playable.all(Date.now()).map(row => row.id),
     list: () => list.all(Date.now()),
     find: id => find.get(id, Date.now()),
     usage: () => totals.get(),

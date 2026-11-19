@@ -5,12 +5,14 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
+const { DatabaseSync } = require('node:sqlite');
 const { once } = require('node:events');
 const { spawn } = require('node:child_process');
 const { createDistributor } = require('../services/distributor');
 const { createPreparer } = require('../services/preparer');
 const { digest } = require('../services/protocol');
 const { openLibrary } = require('../services/library');
+const { createSessions } = require('../services/cloud-sessions');
 const { writeCatalog, tone } = require('../test-support/split-fixture.cjs');
 
 async function environment(t) {
@@ -66,7 +68,9 @@ test('split services publish once, restore after restart and serve ten independe
       const headers = { 'X-Vinyl-Session': player.token, 'X-Vinyl-Sequence': String(seq) };
       const queue = (await (await env.request('/api/queue', { headers })).json()).tracks;
       assert.equal(queue.length, 5);
-      const song = await (await env.request('/api/song', { headers })).json();
+      const response = await env.request('/api/song', { headers });
+      assert.match(response.headers.get('server-timing'), /^song;dur=\d+\.\d+$/);
+      const song = await response.json();
       assert.equal(song.id, queue[0].id);
       assert.equal(song.upNext.id, queue[1].id);
       assert.equal(song.upNext.audioHash, queue[1].audioHash);
@@ -84,6 +88,49 @@ test('split services publish once, restore after restart and serve ten independe
   await fs.writeFile(env.manifest, '[]');
   await worker(env);
   assert.equal((await env.request('/audio/tone-0')).status, 404);
+});
+
+test('a skip checks eligibility once, skips a withdrawn queue head and replays the same sequence', () => {
+  let ids = ['a', 'b', 'c', 'd', 'e', 'f', 'g'];
+  let reads = 0;
+  const sessions = createSessions({
+    playableIds() { reads++; return [...ids]; },
+    find(id) { return ids.includes(id); },
+  });
+  const session = sessions.get(sessions.open().token);
+  const [withdrawn, expected] = session.queue;
+  ids = ids.filter(id => id !== withdrawn);
+  reads = 0;
+  assert.equal(sessions.take(session, 1), expected);
+  assert.equal(reads, 1);
+  assert.equal(session.queue.length, 5);
+  assert.ok(!session.queue.includes(withdrawn));
+  const queue = [...session.queue];
+  assert.equal(sessions.take(session, 1), expected);
+  assert.deepEqual(session.queue, queue);
+  ids = [expected];
+  assert.equal(sessions.take(session, 2), expected);
+  ids = [];
+  assert.throws(() => sessions.take(session, 2), { status: 410 });
+  assert.throws(() => sessions.take(session, 3), { status: 503 });
+});
+
+test('opening an existing library indexes its tracks and filters expired media before cleanup', async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'vinyl-existing-library-'));
+  let library = openLibrary(directory, { maxBytes: 1024, maxTracks: 4 });
+  t.after(async () => { library.close(); await fs.rm(directory, { recursive: true, force: true }); });
+  for (const id of ['expired', 'live']) {
+    library.put({ id, validUntil: Date.now() + 60000 }, Buffer.from(id), Buffer.alloc(0), id, new Set());
+  }
+  library.close();
+  const legacy = new DatabaseSync(path.join(directory, 'library.sqlite'));
+  try {
+    legacy.exec("DROP INDEX tracks_playable; UPDATE tracks SET expires = 0 WHERE id = 'expired'");
+  } finally { legacy.close(); }
+  library = openLibrary(directory, { maxBytes: 1024, maxTracks: 4 });
+  assert.equal(library.usage().count, 2);
+  assert.deepEqual(library.playableIds(), ['live']);
+  assert.equal(Buffer.from(library.read('audio', 'live', 0, 4)).toString(), 'live');
 });
 
 test('upload authentication, checksum and media conflicts leave the original library intact', async t => {
