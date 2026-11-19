@@ -543,16 +543,18 @@ function requestPlayback() {
     return;
   }
   const request = nextRequest;
+  const source = audio.src;
   setPlaybackState('buffering', '正在启动音频…');
   armWatchdog();
   audio.play().catch((error) => {
-    if (request !== nextRequest || !started) return;
+    if (request !== nextRequest || source !== audio.src || !started) return;
     if (error.name === 'NotAllowedError') {
       stopPlayback('blocked', '浏览器已阻止自动播放 · 点击播放继续');
     } else {
       autoSkip('播放失败，正在重试…');
     }
   });
+  distributionStream?.pump();
 }
 
 function setPlayingUI(on) {
@@ -613,6 +615,7 @@ audio.addEventListener('playing', () => {
   skipCount = 0;
   clearPlaybackTimers();
   setPlaybackState('playing', current ? '播放中 · ' + current.title : '播放中');
+  distributionStream?.warmNext();
   armWatchdog();
 });
 function onBuffering() {
@@ -628,6 +631,7 @@ audio.addEventListener('pause', () => {
   }
 });
 audio.addEventListener('timeupdate', () => {
+  distributionStream?.pump();
   const d = audio.duration;
   if (d && isFinite(d) && d > 0) {
     const progress = Math.min(100, (audio.currentTime / d) * 100);
@@ -666,6 +670,7 @@ audio.addEventListener('ended', () => {
   autoTimer = setTimeout(() => { autoTimer = null; next('ended'); }, 700);
 });
 audio.addEventListener('error', () => {
+  if (distributionStream) { distributionStream.fallback(); return; }
   if (started && current && ['playing', 'buffering'].includes(playbackState)) {
     autoSkip('音频加载失败，正在换一首…');
   }
@@ -684,7 +689,8 @@ function fetchSong() {
         if (controller.signal.aborted) throw new Error('Song request cancelled');
         headers={'X-Vinyl-Session':token,'X-Vinyl-Sequence':String(++listeningSequence)};
       }
-      r=await fetch('/api/song',{signal:controller.signal,cache:'no-store',...(headers?{headers}:{})});
+      r=await fetch('/api/song',{signal:controller.signal,cache:'no-store',
+        ...(sourceMode === 'distribution' ? {priority:'high'} : {}), ...(headers?{headers}:{})});
       if (personalQueues && r.status===401 && attempt===0) {
         if (listeningToken===headers['X-Vinyl-Session']) listeningToken='';
         continue;
@@ -938,6 +944,154 @@ function setCountry(code, displayName) {
   return code;
 }
 
+// Keep one bounded MP3 prefix in RAM. The session still chooses the actual song
+// when the user advances; only adopt the prefix if the content hash also matches.
+const AUDIO_WINDOW_BYTES = 256 * 1024;
+const DECODE_BATCH_BYTES = 32 * 1024;
+let nextIntro = null;
+let distributionStream = null;
+
+function supportsIntro(song) {
+  return song?.audioType === 'audio/mpeg' && song.audioHash &&
+    song.streamUrl === '/audio/' + song.id && window.MediaSource?.isTypeSupported('audio/mpeg');
+}
+
+// Download a bounded range, but publish received bytes independently of the
+// HTTP response ending. A pending look-ahead can become the current window.
+function fetchAudioWindow(song, start, priority) {
+  const controller = new AbortController();
+  const part = { id: song.id, hash: song.audioHash, controller, bytes: null, received: 0,
+    start, total: 0, done: false, failed: false, notify: null };
+  async function read() {
+    const last = start + AUDIO_WINDOW_BYTES - 1;
+    const response = await fetch(song.streamUrl, { headers: { Range: 'bytes=' + start + '-' + last },
+      cache: 'no-store', priority, signal: controller.signal });
+    const range = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.headers.get('Content-Range'));
+    const total = range && Number(range[3]);
+    if (response.status !== 206 || !Number.isSafeInteger(total) || total <= start ||
+        Number(range[1]) !== start || Number(range[2]) !== Math.min(last, total - 1)) throw new Error('Unexpected audio range');
+    part.total = total;
+    part.bytes = new Uint8Array(Number(range[2]) - start + 1);
+    const reader = response.body.getReader();
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (controller.signal.aborted) return;
+        part.bytes.set(value, part.received);
+        part.received += value.byteLength;
+        part.notify?.();
+      }
+    } finally { reader.releaseLock(); }
+    if (part.received !== part.bytes.length) throw new Error('Incomplete audio range');
+    part.done = true;
+    part.notify?.();
+  }
+  read().catch(() => {
+    if (controller.signal.aborted) return;
+    part.failed = true;
+    controller.abort();
+    part.notify?.();
+  });
+  return part;
+}
+
+function attachDistributionStream(song) {
+  distributionStream?.dispose();
+  const intro = nextIntro;
+  nextIntro = null;
+  const match = intro && !intro.failed && intro.id === song.id && intro.hash === song.audioHash;
+  if (!match) intro?.controller.abort();
+  if (sourceMode !== 'distribution' || !supportsIntro(song)) return false;
+
+  const media = new MediaSource();
+  const url = URL.createObjectURL(media);
+  let buffer, offset = 0, total = Infinity;
+  let part = match ? intro : fetchAudioWindow(song, 0, 'high');
+  const stream = { pump, warmNext, cancelDownload, fallback, dispose };
+  distributionStream = stream;
+  part.notify = pump;
+  function warmNext() {
+    const next = song.upNext;
+    if (distributionStream !== stream || audio.paused || playbackState !== 'playing' ||
+        !supportsIntro(next) || nextIntro || !buffer?.buffered.length) return;
+    const ranges = buffer.buffered;
+    if (offset < total && ranges.end(ranges.length - 1) - audio.currentTime < 1.5) return;
+    nextIntro = fetchAudioWindow(next, 0, 'low');
+  }
+  function cancelDownload() {
+    if (!part) return;
+    part.notify = null;
+    part.controller.abort();
+    part = null;
+  }
+  function dispose() {
+    distributionStream = null;
+    cancelDownload();
+    URL.revokeObjectURL(url);
+  }
+  function fallback() {
+    if (distributionStream !== stream) return;
+    const position = audio.currentTime;
+    dispose();
+    audio.src = song.streamUrl;
+    audio.load();
+    if (position > 0) audio.currentTime = position;
+    if (started && playbackState !== 'loading') requestPlayback();
+  }
+  function pump() {
+    if (distributionStream !== stream || !buffer || buffer.updating || media.readyState !== 'open') return;
+    try {
+      if (part?.failed) { fallback(); return; }
+      const ranges = buffer.buffered;
+      if (ranges.length && ranges.start(0) < audio.currentTime - 60) {
+        buffer.remove(0, audio.currentTime - 30);
+        return;
+      }
+      if (part) {
+        const consumed = offset - part.start;
+        const available = part.received - consumed;
+        if (available >= DECODE_BATCH_BYTES || (available && part.done)) {
+          if (total !== Infinity && total !== part.total) throw new Error('Audio size changed');
+          total = part.total;
+          buffer.appendBuffer(part.bytes.subarray(consumed, part.received));
+          offset += available;
+          return;
+        }
+        warmNext();
+        if (!part.done) return;
+        part.notify = null;
+        part = null;
+      }
+      if (offset === total) { media.endOfStream(); return; }
+      if (audio.paused || (ranges.length && ranges.end(ranges.length - 1) > audio.currentTime + 18)) return;
+      part = fetchAudioWindow(song, offset, 'high');
+      part.notify = pump;
+    } catch { fallback(); }
+  }
+  media.addEventListener('sourceopen', () => {
+    if (distributionStream !== stream || buffer) return;
+    try {
+      buffer = media.addSourceBuffer('audio/mpeg');
+      if (song.duration > 0) media.duration = song.duration;
+      buffer.addEventListener('updateend', pump);
+      buffer.addEventListener('error', fallback);
+      pump();
+    } catch { fallback(); }
+  }, { once: true });
+  audio.preload = 'auto';
+  audio.src = url;
+  audio.load();
+  return true;
+}
+
+window.addEventListener('pagehide', event => {
+  if (event.persisted) return;
+  nextIntro?.controller.abort();
+  nextIntro = null;
+  distributionStream?.dispose();
+});
+
 function setSong(s) {
   invalidateCountryPoll();
   const previous = current;
@@ -982,8 +1136,10 @@ function setSong(s) {
   labelTitle.textContent = s.title;
   labelArtist.textContent = s.artist;
 
-  audio.src = s.streamUrl;
-  audio.load();
+  if (!attachDistributionStream(s)) {
+    audio.src = s.streamUrl;
+    audio.load();
+  }
   // The replacement is ready and the browser has detached the previous source.
   // Preserve the current cache when pausing or when fetching a replacement fails.
   if (previous && previous.id !== s.id) releaseSongAudio(previous);
@@ -1004,6 +1160,9 @@ async function next(reason = 'manual') {
   clearPlaybackTimers();
   setPlaybackState('loading', '正在切换…');
   audio.pause();
+  // Leave decoded bytes available for resume if selection fails, but release
+  // the previous download before asking the distributor for the next song.
+  distributionStream?.cancelDownload();
   let s = nextSong;
   nextSong = null;
   if (s && !isFreshSongCandidate(s)) {

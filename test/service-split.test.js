@@ -53,7 +53,9 @@ test('split services publish once, restore after restart and serve ten independe
   assert.match(await worker(env), /Published tracks: 6/);
   assert.match(await worker(env), /Published tracks: 0/);
   await env.stop(); await env.start();
-  assert.equal((await (await env.request('/api/info')).json()).songs, 12);
+  const info = await (await env.request('/api/info')).json();
+  assert.equal(info.songs, 12);
+  assert.equal(info.version, require('../package.json').version);
   const players = await Promise.all(Array.from({ length: 10 }, async () => {
     const reply = await env.request('/api/listening-session', { method: 'POST' });
     return { token: (await reply.json()).token, ids: new Set() };
@@ -66,6 +68,8 @@ test('split services publish once, restore after restart and serve ten independe
       assert.equal(queue.length, 5);
       const song = await (await env.request('/api/song', { headers })).json();
       assert.equal(song.id, queue[0].id);
+      assert.equal(song.upNext.id, queue[1].id);
+      assert.equal(song.upNext.audioHash, queue[1].audioHash);
       assert.equal((await (await env.request('/api/song', { headers })).json()).id, song.id);
       assert.ok(!player.ids.has(song.id)); player.ids.add(song.id);
       const audio = await env.request(song.streamUrl, { headers: { Range: 'bytes=0-4095' } });

@@ -6,6 +6,7 @@ const path = require('node:path');
 const { Readable } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
 const { timingSafeEqual } = require('node:crypto');
+const { version } = require('../package.json');
 const { openLibrary } = require('./library');
 const { createSessions } = require('./cloud-sessions');
 const { AUDIO_LIMIT, COVER_LIMIT, ID, digest, fault, integer, readLimited, validTrack } = require('./protocol');
@@ -48,6 +49,7 @@ function createDistributor({ directory, token, target = 72, maxBytes = 5 * 1024 
     return { id, title: m.title, artist: m.artist, album: m.album, duration: m.duration,
       country: m.country, countrycode: m.countrycode, countryStatus: m.countrycode ? 'resolved' : 'none',
       sourceUrl: m.sourceUrl, license: m.license, streamUrl: '/audio/' + id,
+      audioType: m.audioType, audioHash: m.audioHash,
       artwork: row.coverSize ? '/artwork/' + id : '' };
   }
 
@@ -126,15 +128,23 @@ function createDistributor({ directory, token, target = 72, maxBytes = 5 * 1024 
     if (!['HEAD', 'GET'].includes(method)) throw fault(405, 'Unsupported method');
     if (route === '/api/info') {
       const count = library.list().length;
-      return json(res, 200, { mode: 'distribution', version: '2.0.0', configured: true, serverMode: true,
+      return json(res, 200, { mode: 'distribution', version, configured: true, serverMode: true,
         personalQueues: true, songs: count, buffer: { ready: count, target, sessions: sessions.count(), perSessionTarget: sessions.target } });
     }
     if (route.startsWith('/api/') && method !== 'GET') throw fault(405, 'GET required');
     if (route === '/api/queue') return json(res, 200, { tracks: sessions.fill(sessions.get(token)).map(publicSong) });
     if (route === '/api/song') {
       if (!token) throw fault(401, 'SESSION_EXPIRED');
-      const id = sessions.take(sessions.get(token), Number(req.headers['x-vinyl-sequence']));
-      return json(res, 200, publicSong(id));
+      const session = sessions.get(token);
+      const id = sessions.take(session, Number(req.headers['x-vinyl-sequence']));
+      const song = publicSong(id);
+      const head = session.queue[0];
+      const row = head && library.find(head);
+      if (row) {
+        const meta = JSON.parse(row.meta);
+        song.upNext = { id: head, streamUrl: '/audio/' + head, audioType: meta.audioType, audioHash: meta.audioHash };
+      }
+      return json(res, 200, song);
     }
     if (route === '/api/country') {
       const song = publicSong(url.searchParams.get('id') || '');

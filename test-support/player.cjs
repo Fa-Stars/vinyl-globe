@@ -6,7 +6,7 @@ const vm = require('node:vm');
 
 async function flush() { for (let i = 0; i < 30; i++) await Promise.resolve(); }
 
-async function createPlayer({ songResponse, sessionResponse, demo = false, reducedMotion = false, playError, infoResponse, mapData, mapResponse, capitalsResponse, countryResponse, electronAPI } = {}) {
+async function createPlayer({ songResponse, sessionResponse, demo = false, reducedMotion = false, playError, infoResponse, mapData, mapResponse, capitalsResponse, countryResponse, electronAPI, mediaSource, rangeResponse } = {}) {
   let now = 0;
   let timerId = 0;
   const timers = new Map();
@@ -105,6 +105,7 @@ async function createPlayer({ songResponse, sessionResponse, demo = false, reduc
     if (url === 'capitals.json') return response({});
     if (url === '/api/info') return infoResponse ? infoResponse(response, options.signal) : response({ mode: 'jamendo', configured: true });
     if (url === '/api/listening-session') return sessionResponse ? sessionResponse(options,response) : response({token:'test-session-token'});
+    if (rangeResponse && url.startsWith('/audio/')) return rangeResponse(url, options);
     if (url.startsWith('/api/country?') && countryResponse) return countryResponse(url, options.signal, response);
     if (url === '/api/song') {
       const index = ++songsRequested;
@@ -124,6 +125,7 @@ async function createPlayer({ songResponse, sessionResponse, demo = false, reduc
     get src() { return this._src || ''; }
   }
   window.electronAPI = electronAPI;
+  window.MediaSource = mediaSource;
   const motionPreference = new EventTarget();
   motionPreference.matches = reducedMotion;
   window.matchMedia = () => motionPreference;
@@ -134,7 +136,7 @@ async function createPlayer({ songResponse, sessionResponse, demo = false, reduc
     document: { getElementById: element, querySelector: element, activeElement: null },
     window, navigator, location,
     Image,
-    console, fetch, URL, URLSearchParams, AbortController, AbortSignal,
+    console, fetch, URL: mediaSource?.URL || URL, MediaSource: mediaSource, URLSearchParams, AbortController, AbortSignal,
     Date: class extends Date { static now() { return now; } },
     setTimeout: (fn, ms) => schedule(fn, ms), clearTimeout: (id) => timers.delete(id),
     setInterval: (fn, ms) => schedule(fn, ms, true), clearInterval: (id) => timers.delete(id),
